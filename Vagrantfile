@@ -28,7 +28,8 @@ end
 
 memory = read_env 'MEM', '4096'
 cpus = read_env 'CPU', '1'
-master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s
+master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
+master_runs_pods = read_bool_env 'MASTER_RUNS_PODS', true
 
 docker_version = read_env 'DOCKER_VERSION', '5:19.03.5~3-0' # check https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md and apt-cache madison docker-ce
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
@@ -139,6 +140,11 @@ Vagrant.configure("2") do |config_all|
         end
     end
 
+    # Generic
+    config_all.vm.provision :shell, :name => "Setting up aliases", :inline => "
+        grep -q 'alias ll=' || echo 'alias ll=\"ls -alh\"' >> /etc/bash.bashrc
+    "
+
     # Referencing all IPs in /etc/hosts
     definitions.each do |node|
         config_all.vm.provision :shell, :name  => "referencing #{node[:hostname]}", :run => "always", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
@@ -200,6 +206,7 @@ EOF
                 apt-get update
                 apt-get install --yes kubelet=#{k8s_version} kubeadm=#{k8s_version} kubectl=#{k8s_version}
                 apt-mark hold kubelet kubeadm kubectl
+                [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
             "
     end
         
@@ -251,18 +258,16 @@ EOF
                     # Initializing K8s
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
                         [ -f /etc/kubernetes/admin.conf ] || kubeadm init --apiserver-advertise-address=$(#{host_ip_script}) --pod-network-cidr=10.244.0.0/16 | tee /root/k8sjoin.txt
-                        mkdir -p $HOME/.kube
-                        cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config
-                        mkdir -p #{vagrant_home}/.kube
-                        cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config
-                        chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config
+                        if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
+                        if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
                         kubectl get pods --namespace kube-system | grep -q flannel || kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+                        #{if master_runs_pods then "kubectl taint nodes --all node-role.kubernetes.io/master- 2>/dev/null" end}
                     "
                 else
                     # Joining K8s
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the Kubernetes cluster', inline: "
-                        [ -d #{root_hostname}:~/.kube ] || scp -o StrictHostKeyChecking=no -r #{root_hostname}:~/.kube .
-                        [ -f /etc/kubernetes/admin.conf ] || kubeadm join --discovery-file .kube/config
+                        [ -d ~/.kube ] || scp -o StrictHostKeyChecking=no -r #{root_hostname}:~/.kube .
+                        [ -f /etc/kubernetes/kubelet.conf ] || kubeadm join --discovery-file .kube/config
                     "
                 end
             end
