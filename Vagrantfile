@@ -36,6 +36,8 @@ docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
 
+gluster_version = read_env 'GLUSTER_VERSION', '7'
+
 host_itf = read_env 'ITF', false
 
 leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
@@ -164,7 +166,7 @@ Vagrant.configure("2") do |config_all|
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
             apt-get install --yes apt-transport-https ca-certificates curl gnupg2 software-properties-common
-            curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -
+            curl -fsSL https://download.docker.com/linux/$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')/gpg | apt-key add -
             apt-key fingerprint #{docker_repo_fingerprint}
             add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]') $(lsb_release -cs) stable\"
             apt-get update
@@ -193,7 +195,7 @@ EOF
     # Kubernetes installation
     if k8s_version
         raise "Cannot install Kubernetes without Docker" unless docker_version
-        config_all.vm.provision "K8SInstall", type: "shell", name: 'installing Kubernetes', inline: "
+        config_all.vm.provision "K8SInstall", type: "shell", name: 'Installing Kubernetes', inline: "
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
                 swapoff -a;sed -i '/swap/d' /etc/fstab
@@ -208,6 +210,23 @@ EOF
                 apt-mark hold kubelet kubeadm kubectl
                 [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
             "
+    end
+
+    # Gluster installation
+    if gluster_version
+        config_all.vm.provision "GlusterInstall", type: "shell", name: 'Installing GlusterFS', inline: "
+            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+            export DEBIAN_FRONTEND=noninteractive
+            curl -s https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/rsa.pub | apt-key add -
+            DEBID=$(grep 'VERSION_ID=' /etc/os-release | cut -d '=' -f 2 | tr -d '\"')
+            DEBVER=$(grep 'VERSION=' /etc/os-release | grep -Eo '[a-z]+')
+            DEBARCH=$(dpkg --print-architecture)
+            echo \"deb https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/LATEST/Debian/${DEBID}/${DEBARCH}/apt ${DEBVER} main\" > /etc/apt/sources.list.d/gluster.list
+            apt-get update
+            apt-get install --yes glusterfs-server
+            systemctl start glusterd
+            systemctl enable glusterd
+        "
     end
         
     (1..nodes).each do |node_number|
@@ -257,17 +276,25 @@ EOF
                 if master
                     # Initializing K8s
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        [ -f /etc/kubernetes/admin.conf ] || kubeadm init --apiserver-advertise-address=$(#{host_ip_script}) --pod-network-cidr=10.244.0.0/16 | tee /root/k8sjoin.txt
+                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=$(#{host_ip_script}) --pod-network-cidr=10.244.0.0/16 | tee /root/k8sjoin.txt; fi
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
                         kubectl get pods --namespace kube-system | grep -q flannel || kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
-                        #{if master_runs_pods then "kubectl taint nodes --all node-role.kubernetes.io/master- 2>/dev/null" end}
-                    "
+                        "
                 else
                     # Joining K8s
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the Kubernetes cluster', inline: "
                         [ -d ~/.kube ] || scp -o StrictHostKeyChecking=no -r #{root_hostname}:~/.kube .
                         [ -f /etc/kubernetes/kubelet.conf ] || kubeadm join --discovery-file .kube/config
+                    "
+                end
+            end
+
+            if gluster_version
+                unless master
+                    # Joining Gluster
+                    config.vm.provision "GlusterJoin", type: "shell", name: 'Joining the Gluster cluster', inline: "
+                        ssh -o StrictHostKeyChecking=no #{root_hostname} 'gluster pool list' | grep -q #{hostname} || ssh #{root_hostname} 'gluster peer probe #{hostname}'
                     "
                 end
             end
