@@ -37,6 +37,8 @@ docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
 
 gluster_version = read_env 'GLUSTER_VERSION', '7'
+# Directory root for additional vdisks for Gluster
+vdisk_root = `vboxmanage list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip
 
 host_itf = read_env 'ITF', false
 
@@ -223,7 +225,7 @@ EOF
             DEBARCH=$(dpkg --print-architecture)
             echo \"deb https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/LATEST/Debian/${DEBID}/${DEBARCH}/apt ${DEBVER} main\" > /etc/apt/sources.list.d/gluster.list
             apt-get update
-            apt-get install --yes glusterfs-server
+            apt-get install --yes glusterfs-server glusterfs-client xfsprogs
             systemctl start glusterd
             systemctl enable glusterd
         "
@@ -291,6 +293,29 @@ EOF
             end
 
             if gluster_version
+                # Additional disk for GlusterFS storage
+                config.vm.provider :virtualbox do |vb|
+                    vb.name = hostname
+                    gluster_disk_file = File.join(vdisk_root, hostname, "gluster-#{hostname}.vdi")
+                    unless File.exist?(gluster_disk_file)
+                        vb.customize ['createhd', '--filename', gluster_disk_file, '--format', 'VDI', '--size', 60 * 1024]
+                    end
+                    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', 0, '--type', 'hdd', '--medium', gluster_disk_file]
+                end
+                config.vm.provision "GlusterPartition", type: "shell", name: 'Creating an XFS partition for Gluster', inline: "
+                    [ -e /dev/sdb ] || cat <<EOF | fdisk /dev/sdb
+n
+p
+1
+
+
+w
+EOF
+                    [ -e /dev/sdb1 ] || mkfs.xfs /dev/sdb1
+                    grep -q '/dev/sdb1' /etc/fstab || echo '/dev/sdb1 /export/sdb1 xfs defaults 0 0' >> /etc/fstab
+                    mkdir -p /export/sdb1 && mount -a && mkdir -p /export/sdb1/brick
+                "
+
                 unless master
                     # Joining Gluster
                     config.vm.provision "GlusterJoin", type: "shell", name: 'Joining the Gluster cluster', inline: "
