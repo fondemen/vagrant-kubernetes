@@ -29,6 +29,8 @@ end
 memory = read_env 'MEM', '4096'
 cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
+nodes = (read_env 'NODES', 3).to_i
+raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
 box = read_env 'BOX', 'bento/debian-10' # must be debian-based
 # Box-dependent
@@ -42,7 +44,9 @@ docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
 
-if read_bool_env 'GLUSTER'
+if read_bool_env 'GLUSTER', true
+    raise "There should be at least 3 nodes in an Heketi cluster" unless nodes >= 3
+
     gluster_version = read_env 'GLUSTER_VERSION', '7'
     # Directory root for additional vdisks for Gluster
     vdisk_root = `vboxmanage list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip
@@ -51,6 +55,8 @@ if read_bool_env 'GLUSTER'
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
     heketi_admin_secret = read_env 'HEKETI_ADMIN', "My Secret"
     heketi_secret = read_env 'HEKETI_PASSWORD', "My Secret"
+
+    gluster_replicas = read_env 'GLUSTER_REPLICAS', '2'
 else
     gluster_version = false
     heketi_version = false
@@ -61,10 +67,6 @@ host_itf = read_env 'ITF', false
 
 leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
-
-nodes = (read_env 'NODES', 3).to_i
-raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
-
 
 guest_additions = read_bool_env 'GUEST_ADDITIONS'
 
@@ -363,7 +365,7 @@ EOF
                             export DEBIAN_FRONTEND=noninteractive
                             if [ ! -x /usr/local/bin/heketi-cli ]; then
                                 apt-get install --yes lvm2
-                                echo 'Downloading Hekti binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
+                                echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
                                 mv ./heketi/heketi /usr/local/bin/
                                 mv ./heketi/heketi-cli /usr/local/bin/
                             fi
@@ -461,7 +463,12 @@ EOF
                         grep -q 'heketi@#{root_hostname}' /home/heketi/.ssh/authorized_keys || ssh -o StrictHostKeyChecking=no #{root_hostname} 'cat /home/heketi/.ssh/id_rsa.pub 2>/dev/null' >> /home/heketi/.ssh/authorized_keys
                         ssh root@#{root_hostname} sudo -u heketi ssh -o StrictHostKeyChecking=no #{hostname} /bin/true
                         CLUSTER_ID=$(ssh root@#{root_hostname} heketi-cli cluster list | tail -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
-                        ssh #{root_hostname} heketi-cli node list | grep -i \"Cluster:$CLUSTER_ID\" | awk '{print $1;}' | cut -d: -f 2 | xargs -I NODE ssh #{root_hostname} heketi-cli node info NODE | grep -i 'Management Hostname' | grep -q #{hostname} || ssh root@#{root_hostname} heketi-cli node list | grep -q #{ip} || ssh root@#{root_hostname} heketi-cli node add --zone=1 --cluster=$CLUSTER_ID --management-host-name=#{hostname} --storage-host-name=#{hostname}
+                        NODES=$(ssh root@#{root_hostname} heketi-cli node list | grep $CLUSTER_ID | awk '{print $1;}' | cut -d : -f 2)
+                        NODE_ID=$(for NODE in $NODES ; do INFO=$(ssh root@#{root_hostname} heketi-cli node info $NODE); echo $INFO | grep -q #{hostname} && echo $NODE; done)
+                        [ -n \"$NODE_ID\" ] || ssh root@#{root_hostname} heketi-cli node list | grep -q #{ip} || ssh root@#{root_hostname} heketi-cli node add --zone=1 --cluster=$CLUSTER_ID --management-host-name=#{hostname} --storage-host-name=#{hostname}
+                        until [ -n \"$NODE_ID\" ]; do NODES=$(ssh root@#{root_hostname} heketi-cli node list | grep $CLUSTER_ID | awk '{print $1;}' | cut -d : -f 2); NODE_ID=$(for NODE in $NODES ; do INFO=$(ssh root@#{root_hostname} heketi-cli node info $NODE); echo $INFO | grep -q #{hostname} && echo $NODE; done); done
+                        DEVICE_ID=$(ssh root@#{root_hostname} heketi-cli node info $NODE_ID | sed -n '/Devices:/,$p' | grep 'Id:' | awk '{print $1;}' | cut -d : -f 2)
+                        [ -n \"$DEVICE_ID\" ] || ssh root@#{root_hostname} heketi-cli device add --name=/dev/sdb1 --node=$NODE_ID
                     "
 
                     if master
@@ -489,7 +496,7 @@ parameters:
     restuser: \\"admin\\"
     secretNamespace: default
     secretName: \\"heketi-secret\\"
-    volumetype: \\"replicate:2\\"" | kubectl apply -f -
+    volumetype: \\"replicate:#{gluster_replicas}\\"" | kubectl apply -f -
 EOF
                     end
                 end
