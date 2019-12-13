@@ -150,10 +150,11 @@ Vagrant.configure("2") do |config_all|
 
     unless guest_additions
         config_all.vm.provider :virtualbox do |vb|
-            vb.check_guest_additions = false
+            #config_all.timezone.value = :host
+            vb.check_guest_additions = upgrade
             vb.functional_vboxsf     = false
             if Vagrant.has_plugin?("vagrant-vbguest") then
-                config_all.vbguest.auto_update = false
+                config_all.vbguest.auto_update = upgrade
             end
         end
     end
