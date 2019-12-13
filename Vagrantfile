@@ -29,16 +29,33 @@ end
 memory = read_env 'MEM', '4096'
 cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
-master_runs_pods = read_bool_env 'MASTER_RUNS_PODS', true
+
+box = read_env 'BOX', 'bento/debian-10' # must be debian-based
+# Box-dependent
+vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
+vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
+vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
+upgrade = read_bool_env 'UPGRADE'
 
 docker_version = read_env 'DOCKER_VERSION', '5:19.03.5~3-0' # check https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md and apt-cache madison docker-ce
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
 
-gluster_version = read_env 'GLUSTER_VERSION', '7'
-# Directory root for additional vdisks for Gluster
-vdisk_root = `vboxmanage list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip
+if read_bool_env 'GLUSTER'
+    gluster_version = read_env 'GLUSTER_VERSION', '7'
+    # Directory root for additional vdisks for Gluster
+    vdisk_root = `vboxmanage list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip
+
+    heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
+    raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
+    heketi_admin_secret = read_env 'HEKETI_ADMIN', "My Secret"
+    heketi_secret = read_env 'HEKETI_PASSWORD', "My Secret"
+else
+    gluster_version = false
+    heketi_version = false
+end
+
 
 host_itf = read_env 'ITF', false
 
@@ -48,11 +65,6 @@ hostname_prefix = read_env 'PREFIX', 'k8s'
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
-box = read_env 'BOX', 'bento/debian-10' # must be debian-based
-# Box-dependent
-vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
-vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
-vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
 
 guest_additions = read_bool_env 'GUEST_ADDITIONS'
 
@@ -145,9 +157,15 @@ Vagrant.configure("2") do |config_all|
     end
 
     # Generic
-    config_all.vm.provision :shell, :name => "Setting up aliases", :inline => "
+    config_all.vm.provision "Aliases", :type => "shell", :name => "Setting up aliases", :inline => "
         grep -q 'alias ll=' || echo 'alias ll=\"ls -alh\"' >> /etc/bash.bashrc
     "
+    config_all.vm.provision "Upgrade", :type => "shell", :name => "Upgrading system", :inline => "
+        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get dist-upgrade --yes
+    " if upgrade
 
     # Referencing all IPs in /etc/hosts
     definitions.each do |node|
@@ -158,7 +176,9 @@ Vagrant.configure("2") do |config_all|
     config_all.vm.provision "shell", name: 'auto ssh', inline: "mkdir -m 0700 -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys"
     (1..nodes).each do |node_number|
         node_name = definitions[node_number-1][:hostname]
-        config_all.vm.provision "shell", name: "auto ssh from #{node_name}", inline: "grep -q 'root@#{node_name}' /root/.ssh/authorized_keys || echo 'ssh-rsa #{pub_key} root@#{node_name}' >> /root/.ssh/authorized_keys"
+        config_all.vm.provision "shell", name: "auto ssh from #{node_name}", inline: "
+            grep -q 'root@#{node_name}' /root/.ssh/authorized_keys || echo 'ssh-rsa #{pub_key} root@#{node_name}' >> /root/.ssh/authorized_keys
+        "
     end
 
     # Docker Installation
@@ -229,6 +249,15 @@ EOF
             systemctl start glusterd
             systemctl enable glusterd
         "
+
+        # Heketi installation
+        if k8s_version && heketi_version
+            config_all.vm.provision "HeketiUser", type: "shell", name: 'Authorizing Heketi', inline: "
+                useradd -m heketi
+                grep -q 'Defaults:heketi !requiretty' /etc/sudoers || echo 'Defaults:heketi !requiretty' >> /etc/sudoers
+                grep -q 'heketi ALL=' /etc/sudoers || echo 'heketi ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers
+            "
+        end
     end
         
     (1..nodes).each do |node_number|
@@ -272,7 +301,10 @@ EOF
             config.vm.network :private_network, ip: ip
 
             # Same SSH keys for everyone
-            config.vm.provision "shell", name: 'keys', inline: "mkdir -m 0700 -p /root/.ssh; echo '#{priv_key}' > /root/.ssh/id_rsa; echo 'ssh-rsa #{pub_key} root@#{hostname}' > /root/.ssh/id_rsa.pub ; chmod 600 /root/.ssh/id_rsa"
+            config.vm.provision "RootKey", :type => "shell", :name => 'Installing SSH root key', :inline => "
+                mkdir -m 0700 -p /root/.ssh; echo '#{priv_key}' > /root/.ssh/id_rsa; echo 'ssh-rsa #{pub_key} root@#{hostname}' > /root/.ssh/id_rsa.pub ; chmod 600 /root/.ssh/id_rsa
+                ssh -o StrictHostKeyChecking=no #{root_hostname} 'ssh-keyscan #{hostname} >> /root/.ssh/known_hosts'
+            "
 
             if k8s_version
                 if master
@@ -303,7 +335,7 @@ EOF
                     vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', 0, '--type', 'hdd', '--medium', gluster_disk_file]
                 end
                 config.vm.provision "GlusterPartition", type: "shell", name: 'Creating an XFS partition for Gluster', inline: "
-                    [ -e /dev/sdb ] || cat <<EOF | fdisk /dev/sdb
+                    [ -e /dev/sdb1 ] || cat <<EOF | fdisk /dev/sdb
 n
 p
 1
@@ -311,15 +343,125 @@ p
 
 w
 EOF
-                    [ -e /dev/sdb1 ] || mkfs.xfs /dev/sdb1
-                    grep -q '/dev/sdb1' /etc/fstab || echo '/dev/sdb1 /export/sdb1 xfs defaults 0 0' >> /etc/fstab
-                    mkdir -p /export/sdb1 && mount -a && mkdir -p /export/sdb1/brick
+                    #file -sL /dev/sdb1 | grep -q XFS || mkfs.xfs /dev/sdb1
+                    #grep -q '/dev/sdb1' /etc/fstab || echo '/dev/sdb1 /export/sdb1 xfs defaults 0 0' >> /etc/fstab
+                    #mkdir -p /export/sdb1 && mount -a && mkdir -p /export/sdb1/brick
                 "
 
                 unless master
                     # Joining Gluster
                     config.vm.provision "GlusterJoin", type: "shell", name: 'Joining the Gluster cluster', inline: "
                         ssh -o StrictHostKeyChecking=no #{root_hostname} 'gluster pool list' | grep -q #{hostname} || ssh #{root_hostname} 'gluster peer probe #{hostname}'
+                    "
+                end
+
+                if k8s_version && heketi_version
+                    if master
+                        # Installing Heketi on master
+                        config.vm.provision "HeketiSSHKeys", type: "shell", name: 'Creating Heketi SSH keys', inline: "
+                            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                            export DEBIAN_FRONTEND=noninteractive
+                            if [ ! -x /usr/local/bin/heketi-cli ]; then
+                                apt-get install --yes lvm2
+                                echo 'Downloading Hekti binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
+                                mv ./heketi/heketi /usr/local/bin/
+                                mv ./heketi/heketi-cli /usr/local/bin/
+                            fi
+                            if [ ! -f /home/heketi/.ssh/id_rsa ]; then
+                                sudo -u heketi ssh-keygen -t rsa -b 4096 -m PEM -f /home/heketi/.ssh/id_rsa -q -N \"\"
+                            fi
+                        "
+                        config.vm.provision "HeketiInstall", type: "shell", name: 'Installing Heketi', inline: <<-EOF
+                            mkdir -p /etc/heketi
+                            mkdir -p /var/lib/heketi
+                            chown -R heketi:heketi /var/lib/heketi
+                            [ -f /etc/heketi/heketi.json ] || cat > /etc/heketi/heketi.json <<EOL
+{
+    "_port_comment": "Heketi Server Port Number",
+    "port" : "8080",
+
+    "_use_auth": "Enable JWT authorization. Please enable for deployment",
+    "use_auth" : false,
+
+    "_jwt" : "Private keys for access",
+    "jwt" : {
+        "_admin" : "Admin has access to all APIs",
+        "admin" : {
+            "key" : "#{heketi_admin_secret}"
+        },
+        "_user" : "User only has access to /volumes endpoint",
+        "user" : {
+            "key" : "#{heketi_secret}"
+        }
+    },
+
+    "_glusterfs_comment": "GlusterFS Configuration",
+    "glusterfs" : {
+
+        "_executor_comment": "Execute plugin. Possible choices: mock, ssh",
+        "executor" : "ssh",
+
+        "_db_comment": "Database file name",
+        "db" : "/var/lib/heketi/heketi.db",
+
+        "_sshexec_comment": "SSH username and private key file information",
+        "sshexec": {
+            "keyfile": "/home/heketi/.ssh/id_rsa",
+            "user": "heketi",
+            "sudo": true,
+            "port": "22",
+            "fstab": "/etc/fstab",
+            "backup_lvm_metadata": false,
+            "debug_umount_failures": true
+        },
+        
+        "_db_comment": "Database file name",
+        "db": "/var/lib/heketi/heketi.db"
+    }
+}
+EOL
+                            [ -f /etc/systemd/system/heketi.service ] || cat > /etc/systemd/system/heketi.service <<EOL
+[Unit]
+Description=Heketi REST API Service
+Documentation=
+After=network.target
+
+[Service]
+User=heketi
+Group=heketi
+UMask=077
+ExecStart=/usr/local/bin/heketi --config=/etc/heketi/heketi.json
+Restart=on-failure
+
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=heketi
+
+[Install]
+WantedBy=multi-user.target
+EOL
+                            if [ ! -f /etc/rsyslog.d/heketi.conf ]; then
+                                cat > /etc/rsyslog.d/heketi.conf <<EOL
+if \\$programname == 'heketi' then /var/log/heketi.log
+& stop
+EOL
+                                systemctl restart rsyslog
+                            fi
+                            systemctl enable heketi
+                            systemctl start heketi
+                            CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
+                            [ -n "$CLUSTER_ID" ] || heketi-cli cluster create
+EOF
+                    end
+
+                    config.vm.provision "HeketiAddNode", :type => "shell", :name => "Adding #{hostname} to Heketi", :inline => "
+                        sudo -u heketi mkdir -p /home/heketi/.ssh/
+                        sudo -u heketi touch /home/heketi/.ssh/authorized_keys
+                        chmod 600 /home/heketi/.ssh/authorized_keys
+                        grep -q 'heketi@#{root_hostname}' /home/heketi/.ssh/authorized_keys || ssh -o StrictHostKeyChecking=no #{root_hostname} 'cat /home/heketi/.ssh/id_rsa.pub 2>/dev/null' >> /home/heketi/.ssh/authorized_keys
+                        ssh root@#{root_hostname} sudo -u heketi ssh -o StrictHostKeyChecking=no #{hostname} /bin/true
+                        CLUSTER_ID=$(ssh root@#{root_hostname} heketi-cli cluster list | tail -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
+                        ssh #{root_hostname} heketi-cli node list | grep -i \"Cluster:$CLUSTER_ID\" | awk '{print $1;}' | cut -d: -f 2 | xargs -I NODE ssh #{root_hostname} heketi-cli node info NODE | grep -i 'Management Hostname' | grep -q #{hostname} || ssh root@#{root_hostname} heketi-cli node list | grep -q #{ip} || ssh root@#{root_hostname} heketi-cli node add --zone=1 --cluster=$CLUSTER_ID --management-host-name=#{hostname} --storage-host-name=#{hostname}
                     "
                 end
             end
