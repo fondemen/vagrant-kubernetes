@@ -463,6 +463,35 @@ EOF
                         CLUSTER_ID=$(ssh root@#{root_hostname} heketi-cli cluster list | tail -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
                         ssh #{root_hostname} heketi-cli node list | grep -i \"Cluster:$CLUSTER_ID\" | awk '{print $1;}' | cut -d: -f 2 | xargs -I NODE ssh #{root_hostname} heketi-cli node info NODE | grep -i 'Management Hostname' | grep -q #{hostname} || ssh root@#{root_hostname} heketi-cli node list | grep -q #{ip} || ssh root@#{root_hostname} heketi-cli node add --zone=1 --cluster=$CLUSTER_ID --management-host-name=#{hostname} --storage-host-name=#{hostname}
                     "
+
+                    if master
+                        config.vm.provision "HeketiForK8s", :type => "shell", :name => "Setting-up Heketi for Kubernetes", :inline => <<-EOF
+                            kubectl get storageclasses.storage.k8s.io | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
+apiVersion: v1
+kind: Secret
+metadata:
+    name: heketi-secret
+    namespace: default
+type: kubernetes.io/glusterfs
+data:
+    key: $(echo -n #{heketi_admin_secret} | base64)
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+    name: glusterfs
+    namespace: default
+provisioner: kubernetes.io/glusterfs
+parameters:
+    resturl: \\"http://#{root_hostname}:8080\\"
+    clusterid: \\"$CLUSTER_ID\\"
+    restauthenabled: \\"true\\"
+    restuser: \\"admin\\"
+    secretNamespace: default
+    secretName: \\"heketi-secret\\"
+    volumetype: \\"replicate:2\\"" | kubectl apply -f -
+EOF
+                    end
                 end
             end
             
