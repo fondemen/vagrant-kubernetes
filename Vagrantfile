@@ -310,6 +310,14 @@ EOF
             "
 
             if k8s_version
+                config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
+                    if [ ! -f /etc/default/kubelet ]; then
+                        echo \'KUBELET_EXTRA_ARGS=\"--node-ip=#{ip}\"' > /etc/default/kubelet;
+                        systemctl daemon-reload
+                        systemctl restart kubelet
+                    fi
+                    "
+
                 if master
                     # Initializing K8s
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
