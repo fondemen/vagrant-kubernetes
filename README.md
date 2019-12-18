@@ -79,10 +79,10 @@ The number of CPUs for the master node
 Default is 2.
 
 #### PUBLIC_ROOT_KEY
-The public key used for pasphraseless ssh between node. It's the same key for each node. Should be synchronized with [PRIVATE_ROOT_KEY](#privaterootkey). You're encouraged to change the default value.
+The public key used for pasphraseless ssh between node. It's the same key for each node. Should be synchronized with [PRIVATE_ROOT_KEY](#private_root_key). You're encouraged to change the default value.
 
 #### PRIVATE_ROOT_KEY
-The private key used for pasphraseless ssh between node. Should be synchronized with [PUBLIC_ROOT_KEY](#publicrootkey). It's the same key for each node. You're encouraged to change the default value.
+The private key used for pasphraseless ssh between node. Should be synchronized with [PUBLIC_ROOT_KEY](#public_root_key). It's the same key for each node. You're encouraged to change the default value.
 
 #### BOX
 The image to use. It must be Debian-based. So far, only tested with bento/debian-10.
@@ -101,5 +101,5 @@ Whether to check for VirtualBox guest additions.
 Default is false.
 
 #### UPGRADE
-Whether to upgrade OS. Disabled if [GUEST_ADDITIONS](#guestadditions) is false.
+Whether to upgrade OS. Disabled if [GUEST_ADDITIONS](#guest_additions) is false.
 Default is false.
