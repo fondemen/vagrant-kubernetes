@@ -34,6 +34,14 @@ Default is 5:19.03.5~3-0.
 The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [changelog](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md)). Setting this to `0` or `false` disables kubernetes installation.
 Default is 1.17.0-00.
 
+#### HELM_VERSION
+The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Note that you can [control](#tiller_ns) the kubernetes namespace used by tiller.
+Default is 2.16.1.
+
+#### TILLER_NS
+The namespace in which tiller is to be installed by helm.
+Default is tiller.
+
 ### Storage configuration
 
 #### GLUSTER

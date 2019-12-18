@@ -64,6 +64,9 @@ end
 
 traefik = read_bool_env 'TRAEFIK', true
 
+helm_version = read_env 'HELM_VERSION', '2.16.1' # check https://github.com/helm/helm/releases
+tiller_namespace = read_env 'TILLER_NS', 'tiller'
+
 host_itf = read_env 'ITF', false
 
 leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
@@ -669,6 +672,59 @@ fi
 EOF
                 end
             end # Traefik
+
+            if helm_version
+                if master
+                    config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm and Tiller", :inline => <<-EOF
+                        which helm >/dev/null 2>&1 ||
+                            ( echo "Downloading and installing Helm #{helm_version}"
+                            curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+                            mv linux-amd64/helm /usr/local/bin && \\
+                            rm -rf linux-amd64 )
+
+                        echo '---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tiller
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tiller
+  namespace: tiller
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tiller-manager
+  namespace: tiller
+rules:
+- apiGroups: ["", "extensions", "apps"]
+  resources: ["configmaps"]
+  verbs: ["*"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tiller-binding
+  namespace: tiller
+subjects:
+- kind: ServiceAccount
+  name: tiller
+  namespace: tiller
+roleRef:
+  kind: Role
+  name: tiller-manager
+  apiGroup: rbac.authorization.k8s.io' | kubectl apply -f -
+                        sudo -u #{vagrant_user} helm init --service-account tiller --tiller-namespace #{tiller_namespace}
+                        grep -q 'alias helm=' || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
+                        [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm
+                        sudo -u #{vagrant_user} helm repo update
+                        sudo -u #{vagrant_user} helm init --upgrade
+                    EOF
+                end
+            end # Helm
             
         end # node cfg
     end # node
