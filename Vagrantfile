@@ -62,6 +62,7 @@ else
     heketi_version = false
 end
 
+traefik = read_bool_env 'TRAEFIK', true
 
 host_itf = read_env 'ITF', false
 
@@ -171,8 +172,13 @@ Vagrant.configure("2") do |config_all|
     " if upgrade
 
     # Referencing all IPs in /etc/hosts
+    config_all.vm.provision :shell, :name => "Configuring network", :inline => "
+        echo 'nameserver 8.8.8.8 8.8.4.4' > /etc/resolv.conf
+        sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf
+        sed -i '/^127\\.\\0\\.1\\.1/d' /etc/hosts
+    "
     definitions.each do |node|
-        config_all.vm.provision :shell, :name  => "referencing #{node[:hostname]}", :run => "always", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
+        config_all.vm.provision :shell, :name  => "referencing #{node[:hostname]}", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
     end
 
     # Auto SSH
@@ -231,7 +237,7 @@ EOF
                 curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
                 echo 'deb https://apt.kubernetes.io/ kubernetes-xenial main' >/etc/apt/sources.list.d/kubernetes.list
                 apt-get update
-                apt-get install --yes kubelet=#{k8s_version} kubeadm=#{k8s_version} kubectl=#{k8s_version}
+                apt-get install --yes ebtables ethtool kubelet=#{k8s_version} kubeadm=#{k8s_version} kubectl=#{k8s_version}
                 apt-mark hold kubelet kubeadm kubectl
                 [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
             "
@@ -279,6 +285,8 @@ EOF
                   '--name', hostname,
                   '--cpuexecutioncap', '100',
                   '--paravirtprovider', 'kvm',
+                  '--natdnshostresolver1', 'on',
+                  '--natdnsproxy1', 'on',
                 ]
             end
 
@@ -311,8 +319,9 @@ EOF
 
             if k8s_version
                 config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
+                    grep -q 1 /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && sysctl -p /etc/sysctl.conf
                     if [ ! -f /etc/default/kubelet ]; then
-                        echo \'KUBELET_EXTRA_ARGS=\"--node-ip=#{ip}\"' > /etc/default/kubelet;
+                        echo \'KUBELET_EXTRA_ARGS=\"--node-ip=#{ip}\" --cni-bin-dir=/opt/cni/bin,/usr/libexec/cni' > /etc/default/kubelet;
                         systemctl daemon-reload
                         systemctl restart kubelet
                     fi
@@ -321,10 +330,12 @@ EOF
                 if master
                     # Initializing K8s
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=$(#{host_ip_script}) --pod-network-cidr=10.244.0.0/16 | tee /root/k8sjoin.txt; fi
+                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=10.244.0.0/16 | tee /root/k8sjoin.txt; fi
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
-                        kubectl get pods --namespace kube-system | grep -q flannel || kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+                        kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
+                        # curl --retry 5 --fail -s https://docs.projectcalico.org/v3.9/getting-started/kubernetes/installation/hosted/canal/canal.yaml | sed -e 's/canal_iface:.*/canal_iface: \"#{internal_itf}\"/' | tee calico.yml | kubectl apply -f -
+                        # kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/a70459be0084506e4ec919aa1c114638878db11b/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
                         "
                 else
                     # Joining K8s
@@ -333,7 +344,7 @@ EOF
                         [ -f /etc/kubernetes/kubelet.conf ] || kubeadm join --discovery-file .kube/config
                     "
                 end
-            end
+            end # k8s
 
             if gluster_version
                 # Additional disk for GlusterFS storage
@@ -509,8 +520,155 @@ parameters:
     volumetype: \\"replicate:#{gluster_replicas}\\"" | kubectl apply -f -
 EOF
                     end
+                end # Heketi
+            end # Gluster
+
+            if traefik
+                if master
+                    config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
+echo "---
+apiVersion: v1
+kind: Namespace
+metadata:
+    name: traefik
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+    name: traefik
+    namespace: traefik
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: traefik-ingress-controller
+rules:
+  - apiGroups:
+      - \\"\\"
+    resources:
+      - services
+      - endpoints
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+    name: traefik-ingress-controller
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: traefik-ingress-controller
+subjects:
+- kind: ServiceAccount
+  name: traefik
+  namespace: traefik
+---
+kind: Deployment
+apiVersion: #{if Gem::Version.new(k8s_version) >= Gem::Version.new('1.16') then "apps/v1" else "extensions/v1beta1" end }
+metadata:
+  name: traefik-ingress-controller
+  namespace: traefik
+  labels:
+    k8s-app: traefik-ingress-lb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: traefik-ingress-lb
+  template:
+    metadata:
+      labels:
+        k8s-app: traefik-ingress-lb
+        name: traefik-ingress-lb
+    spec:
+      serviceAccountName: traefik
+      terminationGracePeriodSeconds: 60
+      containers:
+      - image: traefik:v1.7
+        name: traefik-ingress-lb
+        ports:
+        - name: http
+          containerPort: 80
+        - name: admin
+          containerPort: 8080
+        args:
+          - --api
+          - --kubernetes
+          - --logLevel=INFO
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Equal
+        effect: NoExecute
+      - key: node-role.kubernetes.io/master
+        operator: Equal
+        effect: NoSchedule
+      nodeSelector:
+        node-role.kubernetes.io/master: \\"\\"
+---
+kind: Service
+apiVersion: v1
+metadata:
+    name: traefik-ingress-service
+    namespace: traefik
+spec:
+    type: NodePort
+    selector:
+        k8s-app: traefik-ingress-lb
+    ports:
+        - protocol: TCP
+          port: 80
+          targetPort: 80
+          nodePort: 30080
+          name: web
+        - protocol: TCP
+          port: 8080
+          targetPort: 8080
+          nodePort: 30088
+          name: admin" | kubectl apply -f -
+which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
+if [ ! -e /etc/nginx/sites-enabled/kubernetes-proxy.conf ]; then
+    cat > /etc/nginx/sites-available/kubernetes-proxy.conf <<EOL
+server {
+    listen 80;
+    listen [::]:80;
+
+    access_log /var/log/nginx/kubernetes-proxy-access.log;
+    error_log /var/log/nginx/kubernetes-proxy-error.log;
+
+    location / {
+                proxy_pass http://127.0.0.1:30080;
+    }
+
+    client_max_body_size 200M; # Pour pouvoir uploader des fichiers volumineux sur minio
+
+    proxy_set_header Upgrade           \\$http_upgrade;
+    proxy_set_header Connection        "upgrade";
+    proxy_set_header Host              \\$host;
+    proxy_set_header X-Real-IP         \\$remote_addr;
+    proxy_set_header X-Forwarded-For   \\$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \\$scheme;
+    proxy_set_header X-Forwarded-Host  \\$host;
+    proxy_set_header X-Forwarded-Port  \\$server_port;
+}
+EOL
+    ln -s /etc/nginx/sites-available/kubernetes-proxy.conf /etc/nginx/sites-enabled/kubernetes-proxy.conf
+    service nginx restart
+fi
+EOF
                 end
-            end
+            end # Traefik
             
         end # node cfg
     end # node
