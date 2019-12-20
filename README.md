@@ -28,11 +28,11 @@ Configuration is performed using environment variables:
 
 #### DOCKER_VERSION
 The version of Docker to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [changelog](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md)). Setting this to `0` or `false` disables docker installation.
-Default is 5:19.03.5~3-0.
+Default is 19.03.
 
 #### K8S_VERSION
 The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [changelog](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md)). Setting this to `0` or `false` disables kubernetes installation.
-Default is 1.17.0-00.
+Default is 1.17.0.
 
 #### HELM_VERSION
 The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Note that you can [control](#tiller_ns) the kubernetes namespace used by tiller.
