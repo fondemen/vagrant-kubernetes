@@ -8,7 +8,7 @@ vagrant halt
 vagrant up
 # Now you can login
 vagrant ssh
-# You are no able to play with kubectl
+# You are no able to play with kubectl, docker, helm
 kubectl get pods
 ```
 
@@ -52,6 +52,10 @@ Default is true.
 The version of GlusterFS to install. Setting this of [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.
 Default is 7.
 
+#### GLUSTER_SIZE
+Size in GiB of the GlusterFS-dedicated additional partition. A new disk of this size is to be created for each VM.
+Default is 60.
+
 #### HEKETI_VERSION
 The version of Heketi to install (see https://github.com/heketi/heketi/releases).
 Default is 9.0.0.
@@ -75,12 +79,16 @@ The number of nodes in the cluster (including master).
 Default is 3 (minimum required for Heketi, could be 2 if setting [GLUSTER](#gluster) to 0)
 
 #### MEM
-The memory used by each VM (in MB)
-Default is 4096.
+The memory used by each worker VM (in MB)
+Default is 2048.
 
 #### CPU
 The number of CPUs for worker nodes
 Default is 1.
+
+#### MASTER_MEM
+The memory used by the master VM (in MB)
+Default is 4096.
 
 #### MASTER_CPU
 The number of CPUs for the master node
@@ -109,5 +117,5 @@ Whether to check for VirtualBox guest additions.
 Default is false.
 
 #### UPGRADE
-Whether to upgrade OS. Disabled if [GUEST_ADDITIONS](#guest_additions) is false.
+Whether to upgrade OS.
 Default is false.

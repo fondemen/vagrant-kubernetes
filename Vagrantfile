@@ -12,7 +12,7 @@ def read_bool_env key, default_value = false
     end
 end
   
-def read_env key, default_value = nil, false_value = false, true_value = true
+def read_env key, default_value = nil, false_value = false
     key = key.to_s
     if ENV.include?(key)
         val = ENV[key].strip
@@ -26,7 +26,8 @@ def read_env key, default_value = nil, false_value = false, true_value = true
     end
 end
 
-memory = read_env 'MEM', '4096'
+memory = read_env 'MEM', '2048'
+master_memory = read_env 'MEM', '4096'
 cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
 nodes = (read_env 'NODES', 3).to_i
@@ -39,7 +40,7 @@ vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
-docker_version = read_env 'DOCKER_VERSION', '5:19.03.5~3-0' # check https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md and apt-cache madison docker-ce
+docker_version = read_env 'DOCKER_VERSION', '19.03' # check https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md and apt-cache madison docker-ce
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
@@ -48,6 +49,7 @@ if read_bool_env 'GLUSTER', true
     raise "There should be at least 3 nodes in an Heketi cluster" unless nodes >= 3
 
     gluster_version = read_env 'GLUSTER_VERSION', '7'
+    gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
     # Directory root for additional vdisks for Gluster
     vdisk_root = `vboxmanage list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip
 
@@ -72,7 +74,7 @@ host_itf = read_env 'ITF', false
 leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
-guest_additions = read_bool_env 'GUEST_ADDITIONS'
+guest_additions = read_bool_env 'GUEST_ADDITIONS', false
 
 public = read_bool_env 'PUBLIC', false
 private = read_bool_env 'PRIVATE', true
@@ -152,10 +154,10 @@ Vagrant.configure("2") do |config_all|
     root_hostname = definitions[0][:hostname]
     root_ip = definitions[0][:ip]
 
-    unless guest_additions
+    if guest_additions
         config_all.vm.provider :virtualbox do |vb|
             #config_all.timezone.value = :host
-            vb.check_guest_additions = upgrade
+            vb.check_guest_additions = true
             vb.functional_vboxsf     = false
             if Vagrant.has_plugin?("vagrant-vbguest") then
                 config_all.vbguest.auto_update = upgrade
@@ -175,37 +177,42 @@ Vagrant.configure("2") do |config_all|
     " if upgrade
 
     # Referencing all IPs in /etc/hosts
-    config_all.vm.provision :shell, :name => "Configuring network", :inline => "
+    config_all.vm.provision "Network", :type => "shell", :name => "Configuring network", :inline => "
         echo 'nameserver 8.8.8.8 8.8.4.4' > /etc/resolv.conf
         sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf
         sed -i '/^127\\.\\0\\.1\\.1/d' /etc/hosts
     "
     definitions.each do |node|
-        config_all.vm.provision :shell, :name  => "referencing #{node[:hostname]}", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
+        config_all.vm.provision "#{node[:hostname]}Access", :type => "shell", :name  => "Referencing #{node[:hostname]}", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
     end
 
     # Auto SSH
-    config_all.vm.provision "shell", name: 'auto ssh', inline: "mkdir -m 0700 -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys"
+    config_all.vm.provision "SSHRootAuthorizationFile", :type => "shell", :name => 'auto ssh', :inline => "mkdir -m 0700 -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys"
     (1..nodes).each do |node_number|
         node_name = definitions[node_number-1][:hostname]
-        config_all.vm.provision "shell", name: "auto ssh from #{node_name}", inline: "
+        config_all.vm.provision "SSHRootAuthorizationFrom#{node_name}", :type => "shell", :name => "auto ssh from #{node_name}", :inline => "
             grep -q 'root@#{node_name}' /root/.ssh/authorized_keys || echo 'ssh-rsa #{pub_key} root@#{node_name}' >> /root/.ssh/authorized_keys
         "
     end
 
     # Docker Installation
     if docker_version
-        config_all.vm.provision "DockerInstall", type: "shell", name: 'Installing Docker', inline: "
-            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update
-            apt-get install --yes apt-transport-https ca-certificates curl gnupg2 software-properties-common
-            curl -fsSL https://download.docker.com/linux/$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')/gpg | apt-key add -
-            apt-key fingerprint #{docker_repo_fingerprint}
-            add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]') $(lsb_release -cs) stable\"
-            apt-get update
-            apt-get install --yes docker-ce=#{docker_version}~$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')-$(lsb_release -cs) docker-ce-cli=#{docker_version}~$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')-$(lsb_release -cs) containerd.io
-            apt-mark hold docker-ce docker-ce-cli containerd.io
+        config_all.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
+            if ! which docker >/dev/null; then
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update
+                apt-get install --yes apt-transport-https ca-certificates curl gnupg2 software-properties-common
+                DIST=$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')
+                curl -fsSL https://download.docker.com/linux/$DIST/gpg | apt-key add -
+                apt-key fingerprint #{docker_repo_fingerprint}
+                add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
+                apt-get update
+                DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
+                echo \"Installing Docker $DOCKER_VERSION\"
+                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io
+                apt-mark hold docker-ce docker-ce-cli containerd.io
+            fi
             if [ ! -f /etc/docker/daemon.json ]; then
                 cat > /etc/docker/daemon.json <<EOF
 {
@@ -230,6 +237,7 @@ EOF
     if k8s_version
         raise "Cannot install Kubernetes without Docker" unless docker_version
         config_all.vm.provision "K8SInstall", type: "shell", name: 'Installing Kubernetes', inline: "
+            if ! which kubeadm >/dev/null; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
                 swapoff -a;sed -i '/swap/d' /etc/fstab
@@ -240,24 +248,35 @@ EOF
                 curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
                 echo 'deb https://apt.kubernetes.io/ kubernetes-xenial main' >/etc/apt/sources.list.d/kubernetes.list
                 apt-get update
-                apt-get install --yes ebtables ethtool kubelet=#{k8s_version} kubeadm=#{k8s_version} kubectl=#{k8s_version}
+                K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}')
+                apt-get install --yes ebtables ethtool kubelet=$K8S_VERSION kubeadm=$K8S_VERSION kubectl=$K8S_VERSION
+                echo \"Installing Kubernetes $K8S_VERSION\"
+                update-alternatives --set iptables /usr/sbin/iptables-legacy
+                update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+                update-alternatives --set arptables /usr/sbin/arptables-legacy
+                update-alternatives --set ebtables /usr/sbin/ebtables-legacy
                 apt-mark hold kubelet kubeadm kubectl
-                [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
+            fi
+            [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
+            grep -q 'alias k=' || echo 'alias k=kubectl' >> /etc/bash.bashrc
+            grep -q 'complete -F __start_kubectl k' || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
             "
     end
 
     # Gluster installation
     if gluster_version
         config_all.vm.provision "GlusterInstall", type: "shell", name: 'Installing GlusterFS', inline: "
-            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-            export DEBIAN_FRONTEND=noninteractive
-            curl -s https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/rsa.pub | apt-key add -
-            DEBID=$(grep 'VERSION_ID=' /etc/os-release | cut -d '=' -f 2 | tr -d '\"')
-            DEBVER=$(grep 'VERSION=' /etc/os-release | grep -Eo '[a-z]+')
-            DEBARCH=$(dpkg --print-architecture)
-            echo \"deb https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/LATEST/Debian/${DEBID}/${DEBARCH}/apt ${DEBVER} main\" > /etc/apt/sources.list.d/gluster.list
-            apt-get update
-            apt-get install --yes glusterfs-server glusterfs-client xfsprogs
+            if ! which gluster >/dev/null; then
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                curl -s https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/rsa.pub | apt-key add -
+                DEBID=$(grep 'VERSION_ID=' /etc/os-release | cut -d '=' -f 2 | tr -d '\"')
+                DEBVER=$(grep 'VERSION=' /etc/os-release | grep -Eo '[a-z]+')
+                DEBARCH=$(dpkg --print-architecture)
+                echo \"deb https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/LATEST/Debian/${DEBID}/${DEBARCH}/apt ${DEBVER} main\" > /etc/apt/sources.list.d/gluster.list
+                apt-get update
+                apt-get install --yes glusterfs-server glusterfs-client xfsprogs
+            fi
             systemctl start glusterd
             systemctl enable glusterd
         "
@@ -281,7 +300,7 @@ EOF
         config_all.vm.define hostname, primary: node_number == 1 do |config|
             config.vm.hostname = hostname
             config.vm.provider :virtualbox do |vb, override|
-                vb.memory = memory
+                vb.memory = if master then master_memory else memory end
                 vb.cpus = if master then master_cpus else cpus end
                 vb.customize [
                   'modifyvm', :id,
@@ -355,7 +374,7 @@ EOF
                     vb.name = hostname
                     gluster_disk_file = File.join(vdisk_root, hostname, "gluster-#{hostname}.vdi")
                     unless File.exist?(gluster_disk_file)
-                        vb.customize ['createhd', '--filename', gluster_disk_file, '--format', 'VDI', '--size', 60 * 1024]
+                        vb.customize ['createhd', '--filename', gluster_disk_file, '--format', 'VDI', '--size', gluster_size * 1024]
                     end
                     vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', 0, '--type', 'hdd', '--medium', gluster_disk_file]
                 end
