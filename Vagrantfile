@@ -27,7 +27,7 @@ def read_env key, default_value = nil, false_value = false
 end
 
 memory = read_env 'MEM', '2048'
-master_memory = read_env 'MEM', '4096'
+master_memory = read_env 'MASTER_MEM', '4096'
 cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
 nodes = (read_env 'NODES', 3).to_i
@@ -44,6 +44,19 @@ docker_version = read_env 'DOCKER_VERSION', '19.03' # check https://github.com/k
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
+
+cni = (read_env 'CNI', 'calico').downcase
+calico = false
+flannel = false
+case cni
+    when 'flannel'
+        flannel = true
+    when 'calico'
+        calico = true
+    else
+        raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
+end
+calico_version = read_env 'CALICO_VERSION', '3.11' if calico
 
 if read_bool_env 'GLUSTER', true
     raise "There should be at least 3 nodes in an Heketi cluster" unless nodes >= 3
@@ -351,14 +364,23 @@ EOF
 
                 if master
                     # Initializing K8s
+                    cidr = if flannel then '10.244.0.0/16' elsif calico then '192.168.0.0/16' else raise "Undefined CNI provider (try using CIDR env var)" end
+
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=10.244.0.0/16 | tee /root/k8sjoin.txt; fi
+                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=#{cidr} | tee /root/k8sjoin.txt; fi
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
-                        kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
-                        # curl --retry 5 --fail -s https://docs.projectcalico.org/v3.9/getting-started/kubernetes/installation/hosted/canal/canal.yaml | sed -e 's/canal_iface:.*/canal_iface: \"#{internal_itf}\"/' | tee calico.yml | kubectl apply -f -
-                        # kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/a70459be0084506e4ec919aa1c114638878db11b/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
                         "
+                    if flannel
+                        config.vm.provision "Flannel", type: "shell", name: 'Setting up Flannel CNI', inline: "
+                            kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
+                        "
+                    elsif calico
+                        config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
+                            kubectl get pods --namespace kube-system | grep -q calico || kubectl apply -f https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml
+                        "
+                    end 
+
                 else
                     # Joining K8s
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the Kubernetes cluster', inline: "

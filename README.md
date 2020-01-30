@@ -34,6 +34,14 @@ Default is 19.03.
 The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [changelog](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md)). Setting this to `0` or `false` disables kubernetes installation.
 Default is 1.17.0.
 
+#### CNI
+The CNI provider to use. Currently supported options are flannel and calico.
+Default is calico.
+
+#### CALICO_VERSION
+The version of calico to use.
+Default is 3.11
+
 #### HELM_VERSION
 The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Note that you can [control](#tiller_ns) the kubernetes namespace used by tiller.
 Default is 2.16.1.
