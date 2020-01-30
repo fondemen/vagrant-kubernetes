@@ -79,7 +79,7 @@ end
 
 traefik = read_bool_env 'TRAEFIK', true
 
-helm_version = read_env 'HELM_VERSION', '2.16.1' # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', '3.0.2' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
 host_itf = read_env 'ITF', false
@@ -167,14 +167,12 @@ Vagrant.configure("2") do |config_all|
     root_hostname = definitions[0][:hostname]
     root_ip = definitions[0][:ip]
 
-    if guest_additions
-        config_all.vm.provider :virtualbox do |vb|
-            #config_all.timezone.value = :host
-            vb.check_guest_additions = true
-            vb.functional_vboxsf     = false
-            if Vagrant.has_plugin?("vagrant-vbguest") then
-                config_all.vbguest.auto_update = upgrade
-            end
+    config_all.vm.provider :virtualbox do |vb|
+        #config_all.timezone.value = :host
+        vb.check_guest_additions = guest_additions
+        vb.functional_vboxsf     = false
+        if Vagrant.has_plugin?("vagrant-vbguest") then
+            config_all.vbguest.auto_update = upgrade
         end
     end
 
@@ -716,14 +714,17 @@ EOF
 
             if helm_version
                 if master
-                    config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm and Tiller", :inline => <<-EOF
+                    config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
                         which helm >/dev/null 2>&1 ||
-                            ( echo "Downloading and installing Helm #{helm_version}"
+                            ( echo \"Downloading and installing Helm #{helm_version}\"
                             curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
                             mv linux-amd64/helm /usr/local/bin && \\
-                            rm -rf linux-amd64 )
-
-                        echo '---
+                            rm -rf linux-amd64 && \\
+                            [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+                    "
+                    if Gem::Version.new(helm_version) < Gem::Version.new('3')
+                        config.vm.provision "TillerInstall", :type => "shell", :name => "Installing Tiller", :inline => <<-EOF
+                            echo '---
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -758,12 +759,12 @@ roleRef:
   kind: Role
   name: tiller-manager
   apiGroup: rbac.authorization.k8s.io' | kubectl apply -f -
-                        sudo -u #{vagrant_user} helm init --service-account tiller --tiller-namespace #{tiller_namespace}
-                        grep -q 'alias helm=' || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
-                        [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm
-                        sudo -u #{vagrant_user} helm repo update
-                        sudo -u #{vagrant_user} helm init --upgrade
-                    EOF
+                            sudo -u #{vagrant_user} helm init --service-account tiller --tiller-namespace #{tiller_namespace}
+                            grep -q 'alias helm=' || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
+                            sudo -u #{vagrant_user} helm repo update
+                            sudo -u #{vagrant_user} helm init --upgrade
+                        EOF
+                    end # Tiller
                 end
             end # Helm
             
