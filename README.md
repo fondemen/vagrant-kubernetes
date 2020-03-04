@@ -115,8 +115,8 @@ The public key used for pasphraseless ssh between node. It's the same key for ea
 The private key used for pasphraseless ssh between node. Should be synchronized with [PUBLIC_ROOT_KEY](#public_root_key). It's the same key for each node. You're encouraged to change the default value.
 
 #### BOX
-The image to use. It must be Debian-based. So far, only tested with bento/debian-10.
-Default is bento/debian-10.
+The image to use. It must be Debian-based. So far, only tested with bento/debian-10 and its fork fondement/k8s.
+Default is fondement/k8s.
 
 #### PREFIX
 The name prefix for VMs. The final VM name is the prefix followed by VM number using 2 digits.

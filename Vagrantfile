@@ -33,7 +33,7 @@ master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for m
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
-box = read_env 'BOX', 'bento/debian-10' # must be debian-based
+box = read_env 'BOX', 'fondement/k8s' # initially was 'bento/debian-10' # must be debian-based
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
 vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
@@ -108,6 +108,9 @@ internal_itf = case ENV['INTERNAL_ITF']
         if public then public_itf else private_itf end
 end # interface used for internal node communication (i.e. should it be public or private ?)
 host_ip_script = "ip -4 addr list #{internal_itf} |  grep -v secondary | grep inet | sed 's/.*inet\\s*\\([0-9.]*\\).*/\\1/'"
+
+init = read_bool_env 'INIT', true
+nodes = 1 unless init
 
 definitions = (1..nodes).map do |node_number|
     hostname = "%s%02d" % [hostname_prefix, node_number]
@@ -192,10 +195,10 @@ Vagrant.configure("2") do |config_all|
         echo 'nameserver 8.8.8.8 8.8.4.4' > /etc/resolv.conf
         sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf
         sed -i '/^127\\.\\0\\.1\\.1/d' /etc/hosts
-    "
+    " if init
     definitions.each do |node|
         config_all.vm.provision "#{node[:hostname]}Access", :type => "shell", :name  => "Referencing #{node[:hostname]}", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
-    end
+    end if init
 
     # Auto SSH
     config_all.vm.provision "SSHRootAuthorizationFile", :type => "shell", :name => 'auto ssh', :inline => "mkdir -m 0700 -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys"
@@ -204,7 +207,7 @@ Vagrant.configure("2") do |config_all|
         config_all.vm.provision "SSHRootAuthorizationFrom#{node_name}", :type => "shell", :name => "auto ssh from #{node_name}", :inline => "
             grep -q 'root@#{node_name}' /root/.ssh/authorized_keys || echo 'ssh-rsa #{pub_key} root@#{node_name}' >> /root/.ssh/authorized_keys
         "
-    end
+    end if init
 
     # Docker Installation
     if docker_version
@@ -272,6 +275,9 @@ EOF
             grep -q 'alias k=' || echo 'alias k=kubectl' >> /etc/bash.bashrc
             grep -q 'complete -F __start_kubectl k' || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
             "
+        config_all.vm.provision "K8SImages", type: "shell", name: 'Downloading Kubernetes images', inline: "
+            kubeadm config images pull
+        " unless init
     end
 
     # Gluster installation
@@ -299,7 +305,25 @@ EOF
                 grep -q 'Defaults:heketi !requiretty' /etc/sudoers || echo 'Defaults:heketi !requiretty' >> /etc/sudoers
                 grep -q 'heketi ALL=' /etc/sudoers || echo 'heketi ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers
             "
+            config_all.vm.provision "HeketiBinaries", type: "shell", name: 'Downloading Heketi binaries', inline: "
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                if [ ! -x /usr/local/bin/heketi-cli ]; then
+                    apt-get install --yes lvm2
+                    echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
+                    mv ./heketi/heketi /usr/local/bin/
+                    mv ./heketi/heketi-cli /usr/local/bin/
+                fi
+            " unless init
         end
+
+        config_all.vm.provision "Nginx", type: "shell", name: 'Downloading nginx', inline: "
+            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+            export DEBIAN_FRONTEND=noninteractive
+            which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
+            systemctl stop nginx
+            systemctl disable nginx
+        " if traefik && !init
     end
         
     (1..nodes).each do |node_number|
@@ -680,6 +704,8 @@ spec:
           nodePort: 30088
           name: admin" | kubectl apply -f -
 which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
+systemctl enable nginx
+systemctl start nginx
 if [ ! -e /etc/nginx/sites-enabled/kubernetes-proxy.conf ]; then
     cat > /etc/nginx/sites-available/kubernetes-proxy.conf <<EOL
 server {
@@ -769,5 +795,5 @@ roleRef:
             end # Helm
             
         end # node cfg
-    end # node
+    end if init # node
 end # config

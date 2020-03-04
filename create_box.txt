@@ -1,0 +1,16 @@
+export BOX='bento/debian-10'
+export UPGRADE=true
+export GUEST_ADDITIONS=true
+export INIT=false
+vagrant box update
+vagrant up
+vagrant package --output k8s.box
+vagrant box remove k8s
+vagrant box add k8s k8s.box
+
+#### Testing ####
+unset UPGRADE
+unset GUEST_ADDITIONS
+unset INIT
+export BOX=k8s
+vagrant up
