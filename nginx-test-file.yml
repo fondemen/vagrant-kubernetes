@@ -14,7 +14,7 @@ metadata:
 spec:
   storageClassName: glusterfs
   accessModes:
-    - ReadWriteOnce
+    - ReadOnlyMany
   resources:
     requests:
       storage: 5Gi
