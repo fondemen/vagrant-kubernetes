@@ -20,7 +20,13 @@ Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#no
 
 Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A-Kubernetes) for the installation procedure...
 
-## configuration
+## Testing
+
+Copy the nginx-test-file.yml to k8s01 (with `vagrant scp` or merely `nano`), `vagrant ssh` (this wil log you on k8s01), then `k apply -f nginx-test-file.yml`. You should find a `nginx.local/` frontend associated to two backends on the [dashboard](http://192.168.2.100:30088). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
+
+To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.2.100` should serve you that file.
+
+## Configuration
 
 Configuration is performed using environment variables:
 
