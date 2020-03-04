@@ -34,6 +34,7 @@ nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
 box = read_env 'BOX', 'fondement/k8s' # initially was 'bento/debian-10' # must be debian-based
+box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
 vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
@@ -163,6 +164,7 @@ Vagrant.configure("2") do |config_all|
     # forward ssh agent to easily ssh into the different machines
     config_all.ssh.forward_agent = true
     config_all.vm.box = box
+    begin config_all.vm.box_url = box_url if box_url rescue nil end
 
     config_all.vm.synced_folder ".", "/vagrant", disabled: true
     config_all.vm.synced_folder ".", "/home/vagrant/sync", disabled: true

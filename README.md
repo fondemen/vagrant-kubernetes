@@ -118,6 +118,10 @@ The private key used for pasphraseless ssh between node. Should be synchronized 
 The image to use. It must be Debian-based. So far, only tested with bento/debian-10 and its fork fondement/k8s.
 Default is fondement/k8s.
 
+#### BOX_URL
+The url of the image to use. It must be consistent with [BOX](#box).
+Default is false.
+
 #### PREFIX
 The name prefix for VMs. The final VM name is the prefix followed by VM number using 2 digits.
 Default value is k8s.
