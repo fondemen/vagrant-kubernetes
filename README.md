@@ -137,3 +137,7 @@ Default is false.
 #### UPGRADE
 Whether to upgrade OS.
 Default is false.
+
+#### SCP
+Whetjer to install the [vagrant-scp](https://github.com/invernizzi/vagrant-scp) plugin.
+Default is true.

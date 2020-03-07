@@ -26,6 +26,19 @@ def read_env key, default_value = nil, false_value = false
     end
 end
 
+required_plugins = []
+required_plugins << 'vagrant-scp' if read_bool_env 'SCP', true
+
+plugins_to_install = required_plugins.select { |plugin| not Vagrant.has_plugin? plugin }
+if not plugins_to_install.empty?
+  puts "Installing plugins: #{plugins_to_install.join(' ')}"
+  if system "vagrant plugin install #{plugins_to_install.join(' ')}"
+    exec "vagrant #{ARGV.join(' ')}"
+  else
+    abort "Installation of one or more plugins has failed. Aborting."
+  end
+end
+
 memory = read_env 'MEM', '2048'
 master_memory = read_env 'MASTER_MEM', '4096'
 cpus = read_env 'CPU', '1'
