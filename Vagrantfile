@@ -78,7 +78,12 @@ if read_bool_env 'GLUSTER', true
     gluster_version = read_env 'GLUSTER_VERSION', '7'
     gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
     # Directory root for additional vdisks for Gluster
-    vdisk_root = `vboxmanage list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip
+    if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
+      vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
+    else
+      vboxmanage_path = "vboxmanage" # Assume it's in the path
+    end
+    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
     heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
