@@ -57,7 +57,7 @@ upgrade = read_bool_env 'UPGRADE'
 docker_version = read_env 'DOCKER_VERSION', '19.03' # check https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md and apt-cache madison docker-ce
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
-k8s_version = read_env 'K8S_VERSION', '1.17.0-00'
+k8s_version = read_env 'K8S_VERSION', '1.17.4'
 
 cni = (read_env 'CNI', 'calico').downcase
 calico = false
