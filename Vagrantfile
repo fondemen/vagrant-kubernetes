@@ -595,6 +595,8 @@ kind: StorageClass
 metadata:
     name: glusterfs
     namespace: default
+    annotations:
+      storageclass.kubernetes.io/is-default-class: \\"true\\"
 provisioner: kubernetes.io/glusterfs
 parameters:
     resturl: \\"http://#{root_ip}:8080\\"
