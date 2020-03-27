@@ -54,7 +54,6 @@ kind: Service
 metadata:
   name: nginx-service
 spec:
-  type: NodePort
   selector:
     run: nginx
   ports:
@@ -62,7 +61,6 @@ spec:
       protocol: TCP
       port: 80
       targetPort: 80
-      nodePort: 30081
 ---
 apiVersion: extensions/v1beta1
 kind: Ingress
