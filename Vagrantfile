@@ -40,7 +40,7 @@ if not plugins_to_install.empty?
 end
 
 memory = read_env 'MEM', '2048'
-master_memory = read_env 'MASTER_MEM', '4096'
+master_memory = read_env 'MASTER_MEM', '2048'
 cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
 nodes = (read_env 'NODES', 3).to_i
@@ -54,10 +54,10 @@ vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
-docker_version = read_env 'DOCKER_VERSION', '19.03' # check https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md and apt-cache madison docker-ce
+docker_version = read_env 'DOCKER_VERSION', '19.03.8' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
-k8s_version = read_env 'K8S_VERSION', '1.17.4'
+k8s_version = read_env 'K8S_VERSION', '1.18.2'
 
 cni = (read_env 'CNI', 'calico').downcase
 calico = false
@@ -70,7 +70,7 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end
-calico_version = read_env 'CALICO_VERSION', '3.11' if calico
+calico_version = read_env 'CALICO_VERSION', '3.13' if calico
 
 if read_bool_env 'GLUSTER', true
     raise "There should be at least 3 nodes in an Heketi cluster" unless nodes >= 3
@@ -96,10 +96,13 @@ else
     heketi_version = false
 end
 
-traefik = read_bool_env 'TRAEFIK', true
+traefik_version = read_env 'TRAEFIK', '2.2'
 
-helm_version = read_env 'HELM_VERSION', '3.0.2' # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', '3.2.0' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
+
+raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
+raise "Traefik requires Helm v3+" if traefik_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 host_itf = read_env 'ITF', false
 
@@ -208,6 +211,8 @@ Vagrant.configure("2") do |config_all|
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
         apt-get dist-upgrade --yes
+        apt-get -y autoremove
+        apt-get -y autoclean
     " if upgrade
 
     # Referencing all IPs in /etc/hosts
@@ -300,6 +305,10 @@ EOF
         " unless init
     end
 
+    config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
+        curl -sL https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml | grep 'image:' | sed 's/image://' | xargs -I IMG docker pull IMG
+        " if calico_version && !init
+
     # Gluster installation
     if gluster_version
         config_all.vm.provision "GlusterInstall", type: "shell", name: 'Installing GlusterFS', inline: "
@@ -343,7 +352,20 @@ EOF
             which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
             systemctl stop nginx
             systemctl disable nginx
-        " if traefik && !init
+        " if traefik_version && !init
+
+        config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+            which helm >/dev/null 2>&1 ||
+                ( echo \"Downloading and installing Helm #{helm_version}\"
+                curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+                mv linux-amd64/helm /usr/local/bin && \\
+                rm -rf linux-amd64 && \\
+                [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+        " if helm_version && !init
+
+        config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
+            docker image pull traefik:#{traefik_version}
+        " if traefik_version && !init
     end
         
     (1..nodes).each do |node_number|
@@ -611,155 +633,6 @@ EOF
                 end # Heketi
             end # Gluster
 
-            if traefik
-                if master
-                    config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
-echo "---
-apiVersion: v1
-kind: Namespace
-metadata:
-    name: traefik
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-    name: traefik
-    namespace: traefik
----
-apiVersion: rbac.authorization.k8s.io/v1beta1
-kind: ClusterRole
-metadata:
-  name: traefik-ingress-controller
-rules:
-  - apiGroups:
-      - \\"\\"
-    resources:
-      - services
-      - endpoints
-      - secrets
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - extensions
-    resources:
-      - ingresses
-    verbs:
-      - get
-      - list
-      - watch
----
-apiVersion: rbac.authorization.k8s.io/v1beta1
-kind: ClusterRoleBinding
-metadata:
-    name: traefik-ingress-controller
-roleRef:
-    apiGroup: rbac.authorization.k8s.io
-    kind: ClusterRole
-    name: traefik-ingress-controller
-subjects:
-- kind: ServiceAccount
-  name: traefik
-  namespace: traefik
----
-kind: Deployment
-apiVersion: #{if Gem::Version.new(k8s_version) >= Gem::Version.new('1.16') then "apps/v1" else "extensions/v1beta1" end }
-metadata:
-  name: traefik-ingress-controller
-  namespace: traefik
-  labels:
-    k8s-app: traefik-ingress-lb
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      k8s-app: traefik-ingress-lb
-  template:
-    metadata:
-      labels:
-        k8s-app: traefik-ingress-lb
-        name: traefik-ingress-lb
-    spec:
-      serviceAccountName: traefik
-      terminationGracePeriodSeconds: 60
-      containers:
-      - image: traefik:v1.7
-        name: traefik-ingress-lb
-        ports:
-        - name: http
-          containerPort: 80
-        - name: admin
-          containerPort: 8080
-        args:
-          - --api
-          - --kubernetes
-          - --logLevel=INFO
-      tolerations:
-      - key: node-role.kubernetes.io/master
-        operator: Equal
-        effect: NoExecute
-      - key: node-role.kubernetes.io/master
-        operator: Equal
-        effect: NoSchedule
-      nodeSelector:
-        node-role.kubernetes.io/master: \\"\\"
----
-kind: Service
-apiVersion: v1
-metadata:
-    name: traefik-ingress-service
-    namespace: traefik
-spec:
-    type: NodePort
-    selector:
-        k8s-app: traefik-ingress-lb
-    ports:
-        - protocol: TCP
-          port: 80
-          targetPort: 80
-          nodePort: 30080
-          name: web
-        - protocol: TCP
-          port: 8080
-          targetPort: 8080
-          nodePort: 30088
-          name: admin" | kubectl apply -f -
-which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
-systemctl enable nginx
-systemctl start nginx
-if [ ! -e /etc/nginx/sites-enabled/kubernetes-proxy.conf ]; then
-    cat > /etc/nginx/sites-available/kubernetes-proxy.conf <<EOL
-server {
-    listen 80;
-    listen [::]:80;
-
-    access_log /var/log/nginx/kubernetes-proxy-access.log;
-    error_log /var/log/nginx/kubernetes-proxy-error.log;
-
-    location / {
-                proxy_pass http://127.0.0.1:30080;
-    }
-
-    client_max_body_size 200M; # Pour pouvoir uploader des fichiers volumineux sur minio
-
-    proxy_set_header Upgrade           \\$http_upgrade;
-    proxy_set_header Connection        "upgrade";
-    proxy_set_header Host              \\$host;
-    proxy_set_header X-Real-IP         \\$remote_addr;
-    proxy_set_header X-Forwarded-For   \\$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \\$scheme;
-    proxy_set_header X-Forwarded-Host  \\$host;
-    proxy_set_header X-Forwarded-Port  \\$server_port;
-}
-EOL
-    ln -s /etc/nginx/sites-available/kubernetes-proxy.conf /etc/nginx/sites-enabled/kubernetes-proxy.conf
-    service nginx restart
-fi
-EOF
-                end
-            end # Traefik
-
             if helm_version
                 if master
                     config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
@@ -815,6 +688,99 @@ roleRef:
                     end # Tiller
                 end
             end # Helm
+
+
+
+            if traefik_version
+                if master
+                    config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
+                        helm repo list | grep -q traefik || ( helm repo add traefik https://containous.github.io/traefik-helm-chart && helm repo update )
+                        kubectl get namespaces traefik > /dev/null 2>&1 || kubectl create namespace traefik
+                        helm -n traefik status traefik 2>/dev/null | grep -q deployed || echo '
+image:
+  tag: #{traefik_version}
+
+globalArguments:
+- "--global.checknewversion"
+additionalArguments:
+- "--providers.kubernetesingress"
+
+service:
+  type: ClusterIP
+  spec:
+    clusterIP: "10.104.140.71"
+
+ports:
+  websecure:
+    expose: false
+
+#persistence:
+#  storageClass: "glusterfs"
+
+tolerations:
+- key: node-role.kubernetes.io/master
+  operator: Equal
+  effect: NoExecute
+- key: node-role.kubernetes.io/master
+  operator: Equal
+  effect: NoSchedule
+nodeSelector:
+  node-role.kubernetes.io/master: ""
+
+ingressRoute:
+  dashboard:
+    enabled: true' | helm install -n traefik traefik traefik/traefik -f -
+                        which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
+                        systemctl enable nginx
+                        systemctl start nginx
+                        if [ ! -e /etc/nginx/sites-enabled/kubernetes-proxy.conf ]; then
+                            cat > /etc/nginx/sites-available/kubernetes-proxy.conf <<EOL
+server {
+    listen 80;
+    listen [::]:80;
+
+    access_log /var/log/nginx/kubernetes-proxy-access.log;
+    error_log /var/log/nginx/kubernetes-proxy-error.log;
+
+    location / {
+        proxy_pass http://10.104.140.71:80;
+    }
+
+    client_max_body_size 200M; # Pour pouvoir uploader des fichiers volumineux sur minio
+
+    proxy_set_header Upgrade           \\$http_upgrade;
+    proxy_set_header Connection        "upgrade";
+    proxy_set_header Host              \\$host;
+    proxy_set_header X-Real-IP         \\$remote_addr;
+    proxy_set_header X-Forwarded-For   \\$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \\$scheme;
+    proxy_set_header X-Forwarded-Host  \\$host;
+    proxy_set_header X-Forwarded-Port  \\$server_port;
+}
+EOL
+                            ln -s /etc/nginx/sites-available/kubernetes-proxy.conf /etc/nginx/sites-enabled/kubernetes-proxy.conf
+                            service nginx restart
+                        fi
+EOF
+                    config.vm.provision "TraefikDashboard", :type => "shell", :name => "Exposing Traefik Dashboard on http://#{root_ip}/dashboard", :inline => <<-EOF
+                        kubectl -n traefik get ingressroute dashboard >/dev/null 2>&1 || echo '---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dashboard
+  namespace: traefik
+spec:
+  entryPoints:
+  - web
+  routes:
+  - match: PathPrefix(`/dashboard`) || PathPrefix(`/api`)
+    kind: Rule
+    services:
+    - name: api@internal
+      kind: TraefikService' | kubectl apply -f -
+EOF
+                end
+            end # Traefik
             
         end # node cfg
     end if init # node

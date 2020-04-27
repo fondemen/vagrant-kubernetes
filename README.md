@@ -3,28 +3,27 @@ Starting up a Kubernetes cluster with Vagrant and VirtualBox.
 
 ```
 vagrant up
-# VMs need to be restarted after install...
-vagrant halt
-vagrant up
 # Now you can login
 vagrant ssh
 # You are no able to play with kubectl, docker, helm
 kubectl get pods
 ```
 
-Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) variable).
+Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables).
 
-[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/). A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
+Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
-[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik v1](https://docs.traefik.io/v1.7/user-guide/kubernetes/) on port 30080, proxied from port 80 by [nginx](https://nginx.org/). The traefik dashboard is available at http://192.168.2.100:30088.
+[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
+
+[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 30080, proxied from port 80 by [nginx](https://nginx.org/). The traefik dashboard is available at http://192.168.2.100/dashboard/.
 
 Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A-Kubernetes) for the installation procedure...
 
 ## Testing
 
-Copy the nginx-test-file.yml to k8s01 (with `vagrant scp` or merely `nano`), `vagrant ssh` (this wil log you on k8s01), then `k apply -f nginx-test-file.yml`. You should find a `nginx.local/` frontend associated to two backends on the [dashboard](http://192.168.2.100:30088). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
 
-To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.2.100` should serve you that file.
+To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). You can find the exact volume name with `kubectl get pv $(kubectl get pvc test-gluster-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.glusterfs.path}'`. Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.2.100` should serve you that file.
 
 ## Configuration
 
@@ -33,12 +32,12 @@ Configuration is performed using environment variables:
 ### Cluster configuration
 
 #### DOCKER_VERSION
-The version of Docker to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [changelog](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md)). Setting this to `0` or `false` disables docker installation.
-Default is 19.03.
+The version of Docker to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables Docker installation.
+Default is 19.03.8.
 
 #### K8S_VERSION
-The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [changelog](https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG-1.17.md)). Setting this to `0` or `false` disables kubernetes installation.
-Default is 1.17.0.
+The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables kubernetes installation.
+Default is 1.18.2.
 
 #### CNI
 The CNI provider to use. Currently supported options are flannel and calico.
@@ -46,14 +45,14 @@ Default is calico.
 
 #### CALICO_VERSION
 The version of calico to use.
-Default is 3.11
+Default is 3.13.
 
 #### HELM_VERSION
 The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Note that you can [control](#tiller_ns) the kubernetes namespace used by tiller.
-Default is 2.16.1.
+Default is 3.2.0.
 
 #### TILLER_NS
-The namespace in which tiller is to be installed by helm.
+The namespace in which tiller is to be installed by helm. This parameter is ignored in case [HELM_VERSION](#helm_version) is &ge; 3.
 Default is tiller.
 
 ### Storage configuration
@@ -83,14 +82,14 @@ User passsword for Heketi.
 ### Ingress configuration
 
 #### TRAEFIK
-Whether to install traefik.
-Default is true.
+The version of Traefik to install. Check tags on [Docker Hub](https://hub.docker.com/_/traefik).
+Default is 2.2.
 
 ### Nodes configuration
 
 #### NODES
 The number of nodes in the cluster (including master).
-Default is 3 (minimum required for Heketi, could be 2 if setting [GLUSTER](#gluster) to 0)
+Default is 3 (minimum required for Heketi, could be 2 if setting [GLUSTER](#gluster) to 0).
 
 #### MEM
 The memory used by each worker VM (in MB)
@@ -102,7 +101,7 @@ Default is 1.
 
 #### MASTER_MEM
 The memory used by the master VM (in MB)
-Default is 4096.
+Default is 2048.
 
 #### MASTER_CPU
 The number of CPUs for the master node
@@ -135,9 +134,9 @@ Whether to check for VirtualBox guest additions.
 Default is false.
 
 #### UPGRADE
-Whether to upgrade OS.
+Whether to upgrade OS. In case OS is actually upgraded, restart cluster with `vagrant halt;vagrant up`.
 Default is false.
 
 #### SCP
-Whetjer to install the [vagrant-scp](https://github.com/invernizzi/vagrant-scp) plugin.
+Whether to install the [vagrant-scp](https://github.com/invernizzi/vagrant-scp) plugin.
 Default is true.
