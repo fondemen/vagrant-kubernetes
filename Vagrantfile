@@ -559,7 +559,7 @@ EOL
                             systemctl enable heketi
                             systemctl start heketi
                             CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
-                            [ -n "$CLUSTER_ID" ] || heketi-cli cluster create || sleep 10 &&  heketi-cli cluster create
+                            [ -n "$CLUSTER_ID" ] || heketi-cli cluster create || ( sleep 10 &&  heketi-cli cluster create )
 EOF
                     end
 
