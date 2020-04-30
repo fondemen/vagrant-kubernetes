@@ -96,6 +96,20 @@ else
     heketi_version = false
 end
 
+if read_bool_env 'STORAGEOS', true
+    storageos_version = read_env 'STORAGEOS_VERSION', '1.5.3'
+    storageos_user = read_env 'STORAGEOS_USER', 'storageos'
+    storageos_password = read_env 'STORAGEOS_PASSWORD', false
+    if !storageos_password
+        require 'securerandom'
+        storageos_password = SecureRandom.hex
+    end
+    storageos_memory = read_env 'STORAGEOS_MEMORY', '256Mi'
+    storageos_cli_version = read_env 'STORAGEOS_CLI_VERSION', '1.2.2'
+else
+    storageos_version = false
+end
+
 traefik_version = read_env 'TRAEFIK', '2.2'
 
 helm_version = read_env 'HELM_VERSION', '3.2.0' # check https://github.com/helm/helm/releases
@@ -367,6 +381,14 @@ EOF
             docker image pull traefik:#{traefik_version}
         " if traefik_version && !init
     end
+
+    if storageos_version
+        config_all.vm.provision "StorageOSDownload", type: "shell", name: 'Downloading StorageOS binaries', inline: "
+            curl -Ls https://github.com/storageos/cluster-operator/releases/download/#{storageos_version}/storageos-operator.yaml  | grep 'image:' | sed 's/image://' | xargs -I IMG docker pull IMG
+            curl -Ls https://raw.githubusercontent.com/storageos/cluster-operator/#{storageos_version}/internal/pkg/image/image.go | grep ContainerImage | grep -v CSIv0 | grep -v NFS | cut -d = -f 2 | tr -d \" | xargs -I IMG docker pull IMG
+            which storageos >/dev/null 2>&1 || curl -sSLo storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x storageos && sudo mv storageos /usr/local/bin/
+        " unless init
+    end
         
     (1..nodes).each do |node_number|
         definition = definitions[node_number-1]
@@ -632,6 +654,47 @@ EOF
                     end
                 end # Heketi
             end # Gluster
+
+            if storageos_version
+
+                if master
+                    config.vm.provision "StorageOSInstall", type: "shell", name: 'Installing StorageOS', inline: <<-EOF
+                        kubectl get namespaces storageos-operator >/dev/null 2>&1 || kubectl create -f https://github.com/storageos/cluster-operator/releases/download/#{storageos_version}/storageos-operator.yaml
+                        kubectl -n storageos-operator get secrets storageos-api >/dev/null 2>&1 || echo "---
+apiVersion: v1
+kind: Secret
+metadata:
+    name: storageos-api
+    namespace: storageos-operator
+    labels:
+        app: storageos
+type: kubernetes.io/storageos
+data:
+    apiUsername: $(echo -n '#{storageos_user}' | base64)
+    apiPassword: $(echo -n '#{storageos_password}' | base64)" | kubectl apply -f -
+                        kubectl -n storageos-operator get storageosclusters.storageos.com storageos >/dev/null 2>&1 || echo '---
+apiVersion: "storageos.com/v1"
+kind: StorageOSCluster
+metadata:
+    name: "storageos"
+    namespace: "storageos-operator"
+spec:
+    secretRefName: "storageos-api" # Reference from the Secret created in the previous step
+    secretRefNamespace: "storageos-operator"  # Namespace of the Secret
+    k8sDistro: "upstream"
+    images:
+        nodeContainer: "storageos/node:#{storageos_version}"
+    csi:
+        enable: true
+        deploymentStrategy: deployment
+    resources:
+        requests:
+        memory: "#{storageos_memory}"' | kubectl apply -f -
+                        grep -q 'export STORAGEOS_USERNAME=' /etc/bash.bashrc || echo 'export STORAGEOS_USERNAME=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiUsername}' | base64 -d) STORAGEOS_PASSWORD=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiPassword}' | base64 -d)' >> /etc/bash.bashrc
+                        grep -q 'export STORAGEOS_HOST=' /etc/bash.bashrc || echo 'export STORAGEOS_HOST=$(kubectl -n storageos get svc storageos -o jsonpath='{.spec.clusterIP}')' >> /etc/bash.bashrc
+EOF
+                end
+            end # StorageOS
 
             if helm_version
                 if master

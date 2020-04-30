@@ -1,0 +1,84 @@
+# Once deployed with kubectl apply, one should be able to get an nginx 404 response with curl -H 'Host: nginx.local' http://192.168.2.100
+# Log-in with vagrant ssh and test the following commands
+# for podip in $(k get pods -l run=nginx -o jsonpath='{.items[*].status.podIP}'); do echo -n "from pod $podip: "; curl $podip; done # to check pods
+# curl -H 'Host: nginx.local' $(k get svc nginx-service -o jsonpath='{.spec.clusterIP}') # to check service
+# curl -H 'Host: nginx.local' http://192.168.2.100 # to check ingress
+# Now write "Hello World!" to an index.html file :
+# k exec $(kubectl get pods -l run=nginx -o jsonpath='{.items[0].metadata.name}') -- /bin/sh -c 'echo "Hello World!" > /usr/share/nginx/html/index.html'
+# and try again above curl commands
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-gluster-pvc
+spec:
+  storageClassName: fast
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1 
+kind: Deployment
+metadata:
+  labels:
+    run: nginx
+  name: nginx-deploy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      run: nginx
+  template:
+    metadata:
+      labels:
+        run: nginx
+    spec:
+      affinity:
+        podAntiAffinity: # so that pods are not all scheduled on the master volume copy
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                run: nginx
+            topologyKey: "kubernetes.io/hostname"
+      volumes:
+      - name: www
+        persistentVolumeClaim:
+          claimName: test-gluster-pvc
+      containers:
+      - image: nginx
+        name: nginx
+        volumeMounts:
+        - name: www
+          mountPath: /usr/share/nginx/html
+        ports:
+          - name: http
+            containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    run: nginx
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: nginx-ingress
+spec:
+  rules:
+  - host: nginx.local
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: nginx-service
+          servicePort: 80

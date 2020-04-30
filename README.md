@@ -13,7 +13,7 @@ Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#no
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
-[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
+[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs" or [StorageOS](https://storageos.com/) using storage class "fast". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
 
 [Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 30080, proxied from port 80 by [nginx](https://nginx.org/). The traefik dashboard is available at http://192.168.2.100/dashboard/.
 
@@ -21,9 +21,21 @@ Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A
 
 ## Testing
 
-Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
+### GlusterFS testing
+
+Invoke `kubectl delete -f kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-storageos.yml` in case you tested with [StorageOS](#storageos-testing).
+
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-gluster.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 404 (as no file exists to be served).
 
 To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). You can find the exact volume name with `kubectl get pv $(kubectl get pvc test-gluster-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.glusterfs.path}'`. Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.2.100` should serve you that file.
+
+### StorageOS testing
+
+Invoke `kubectl delete -f kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-gluster.yml` in case you tested with [GlusterFS](#glusterfs-testing).
+
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-storageos.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 404 (as no file exists to be served).
+
+You should be able to see your volume using StorageOS CLI: `storageos volume ls`. To load a file, run the following command: `k exec $(kubectl get pods -l run=nginx -o jsonpath='{.items[0].metadata.name}') -- /bin/sh -c 'echo "Hello World!" > /usr/share/nginx/html/index.html'`. Now `curl -H 'Host: nginx.local' 192.168.2.100` should return "Hello World!".
 
 ## Configuration
 
@@ -78,6 +90,30 @@ Admin password for Heketi.
 
 #### HEKETI_PASSWORD
 User passsword for Heketi.
+
+#### STORAGEOS
+Whether to install StorageOS.
+Default is true.
+
+#### STORAGEOS_VERSION
+The version of StorageOS to install. Setting this or [STORAGEOS](#storageos) to `0` or `false` disables StorageOS installation.
+Default is 1.5.3.
+
+#### STORAGEOS_USER
+The user name to use for connecting to StorageOS (including for Kubernetes).
+Default is storageos.
+
+#### STORAGEOS_PASSWORD
+The password to use for connecting to StorageOS (including for Kubernetes).
+Default is randomly generated.
+
+#### STORAGEOS_MEMORY
+The memory to allocate StorageOS on each worker node (see https://docs.storageos.com/docs/best-practices/#resource-reservations).
+Default is 256Mi.
+
+#### STORAGEOS_CLI_VERSION
+The version of the StorageOS CLI to install.
+Default is 1.2.2.
 
 ### Ingress configuration
 
