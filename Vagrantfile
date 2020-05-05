@@ -386,7 +386,7 @@ EOF
         config_all.vm.provision "StorageOSDownload", type: "shell", name: 'Downloading StorageOS binaries', inline: "
             curl -Ls https://github.com/storageos/cluster-operator/releases/download/#{storageos_version}/storageos-operator.yaml  | grep 'image:' | sed 's/image://' | xargs -I IMG docker pull IMG
             curl -Ls https://raw.githubusercontent.com/storageos/cluster-operator/#{storageos_version}/internal/pkg/image/image.go | grep ContainerImage | grep -v CSIv0 | grep -v NFS | cut -d = -f 2 | tr -d \" | xargs -I IMG docker pull IMG
-            which storageos >/dev/null 2>&1 || curl -sSLo storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x storageos && sudo mv storageos /usr/local/bin/
+            which storageos >/dev/null || curl -sSLo /usr/local/bin/storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x /usr/local/bin/storageos
         " unless init
     end
         
@@ -690,8 +690,10 @@ spec:
     resources:
         requests:
         memory: "#{storageos_memory}"' | kubectl apply -f -
+                        which storageos >/dev/null || curl -sSLo /usr/local/bin/storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x /usr/local/bin/storageos
                         grep -q 'export STORAGEOS_USERNAME=' /etc/bash.bashrc || echo 'export STORAGEOS_USERNAME=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiUsername}' | base64 -d) STORAGEOS_PASSWORD=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiPassword}' | base64 -d)' >> /etc/bash.bashrc
                         grep -q 'export STORAGEOS_HOST=' /etc/bash.bashrc || echo 'export STORAGEOS_HOST=$(kubectl -n storageos get svc storageos -o jsonpath='{.spec.clusterIP}')' >> /etc/bash.bashrc
+                        [ -f /etc/bash_completion.d/storageos ] || storageos install-bash-completion --stdout > /etc/bash_completion.d/storageos
 EOF
                 end
             end # StorageOS
