@@ -392,6 +392,9 @@ EOF
         " unless init
         
         config_all.vm.provision "EtcdDownload", type: "shell", name: 'Downloading etcd binaries', inline: "
+            [ -f /usr/local/bin/cfssl ] || curl -sLo /usr/local/bin/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
+            [ -f /usr/local/bin/cfssljson ] || curl -sLo https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64
+            chmod +x /usr/local/bin/{cfssl,cfssljson}
             docker image pull quay.io/coreos/etcd:v#{storageos_etcd_version}
         " if !init && storageos_etcd_version
     end
@@ -671,6 +674,49 @@ EOF
                         storageos_etcd_peer_port = 2390
                         storageos_etcd_data_dir = '/var/lib/storageos-etcd'
 
+                        config.vm.provision "StorageOSEtcdCerts", type: "shell", name: 'Generating certificates for etcd for StorageOS', inline: <<-EOF
+                            [ -f /usr/local/bin/cfssl ] || curl -sLo /usr/local/bin/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
+                            [ -f /usr/local/bin/cfssljson ] || curl -sLo /usr/local/bin/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64
+                            chmod +x /usr/local/bin/{cfssl,cfssljson}
+
+                            if [ ! -d /etc/storageos/pki/ ]; then
+                                mkdir -p /etc/storageos/pki/
+                                cd /etc/storageos/pki/
+
+                                echo '{"CN":"CA","key":{"algo":"rsa","size":2048}}' | cfssl gencert -initca - | cfssljson -bare ca -
+                                echo '{"signing":{"default":{"expiry":"43800h","usages":["signing","key encipherment","server auth","client auth"]}}}' > ca-config.json
+                                export ADDRESS=#{root_ip}
+                                export NAME=server
+                                echo '{"CN":"'$NAME'","hosts":[""],"key":{"algo":"rsa","size":2048}}' | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem -hostname="$ADDRESS" - | cfssljson -bare $NAME
+                                export NAME=peer
+                                echo '{"CN":"'$NAME'","hosts":[""],"key":{"algo":"rsa","size":2048}}' | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem -hostname="$ADDRESS" - | cfssljson -bare $NAME
+                                export ADDRESS=
+                                export NAME=client
+                                echo '{"CN":"'$NAME'","hosts":[""],"key":{"algo":"rsa","size":2048}}' | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem -hostname="$ADDRESS" - | cfssljson -bare $NAME
+                                
+                                chmod 0600 /etc/storageos/pki/server-key.pem
+
+                                mv client.pem etcd-client.crt
+                                mv client-key.pem etcd-client.key
+                                cp ca.pem etcd-client-ca.crt
+
+                                mv server.pem server.crt
+                                mv server-key.pem server.key
+                                cp ca.pem server-ca.crt
+
+                                mv peer.pem peer.crt
+                                mv peer-key.pem peer.key
+                                mv ca.pem peer-ca.crt
+
+                                rm *.csr ca-key.pem
+                            fi
+
+                            kubectl get namespaces storageos-etcd  >/dev/null 2>&1 || kubectl create namespace storageos-etcd
+                            #kubectl create secret generic etcd-server-tls --from-file=/etc/storageos/pki/server-ca.crt --from-file=/etc/storageos/pki/server.crt --from-file=/etc/storageos/pki/server.key -n storageos-etcd
+                            #kubectl create secret generic etcd-peer-tls --from-file=/etc/storageos/pki/peer-ca.crt --from-file=/etc/storageos/pki/peer.crt --from-file=/etc/storageos/pki/peer.key -n storageos-etcd
+                            kubectl -n storageos-etcd get secret etcd-client-tls  >/dev/null 2>&1 || kubectl -n storageos-etcd create secret generic etcd-client-tls --from-file=/etc/storageos/pki/etcd-client-ca.crt --from-file=/etc/storageos/pki/etcd-client.crt --from-file=/etc/storageos/pki/etcd-client.key
+                        EOF
+
                         config.vm.provision "StorageOSEtcdInstall", type: "shell", name: 'Installing etcd for StorageOS', inline: <<-EOF
                             mkdir -p #{storageos_etcd_data_dir}
                             if [ "$(docker inspect storageos-etcd -f '{{.Config.Image}}')" != "quay.io/coreos/etcd:v#{storageos_etcd_version}" ]; then
@@ -680,18 +726,27 @@ EOF
                                     -p #{storageos_etcd_client_port}:#{storageos_etcd_client_port} \
                                     -p #{storageos_etcd_peer_port}:#{storageos_etcd_peer_port} \
                                     --mount type=bind,source=#{storageos_etcd_data_dir},destination=/etcd-data \
+                                    --mount type=bind,source=/etc/storageos/pki/,destination=/etc/storageos/pki/ \
                                     --name storageos-etcd-0 \
                                     quay.io/coreos/etcd:v#{storageos_etcd_version} \
                                     /usr/local/bin/etcd \
                                     --name storageos-etcd-0 \
                                     --data-dir /etcd-data \
-                                    --listen-client-urls http://0.0.0.0:#{storageos_etcd_client_port} \
-                                    --advertise-client-urls http://#{root_ip}:#{storageos_etcd_client_port} \
-                                    --listen-peer-urls http://0.0.0.0:#{storageos_etcd_peer_port} \
-                                    --initial-advertise-peer-urls http://#{ip}:#{storageos_etcd_peer_port} \
-                                    --initial-cluster storageos-etcd-0=http://#{root_ip}:#{storageos_etcd_peer_port} \
+                                    --listen-client-urls https://0.0.0.0:#{storageos_etcd_client_port} \
+                                    --advertise-client-urls https://#{root_ip}:#{storageos_etcd_client_port} \
+                                    --listen-peer-urls https://0.0.0.0:#{storageos_etcd_peer_port} \
+                                    --initial-advertise-peer-urls https://#{ip}:#{storageos_etcd_peer_port} \
+                                    --initial-cluster storageos-etcd-0=https://#{root_ip}:#{storageos_etcd_peer_port} \
                                     --initial-cluster-token storageos-etcd-tkn \
                                     --initial-cluster-state new \
+                                    --client-cert-auth=true \
+                                    --trusted-ca-file=/etc/storageos/pki/server-ca.crt \
+                                    --cert-file=/etc/storageos/pki/server.crt \
+                                    --key-file=/etc/storageos/pki/server.key \
+                                    --peer-client-cert-auth=true \
+                                    --peer-trusted-ca-file=/etc/storageos/pki/peer-ca.crt \
+                                    --peer-cert-file=/etc/storageos/pki/peer.crt \
+                                    --peer-key-file=/etc/storageos/pki/peer.key \
                                     --quota-backend-bytes 8589934592 \
                                     --auto-compaction-retention 100 \
                                     --auto-compaction-mode revision \
@@ -701,9 +756,11 @@ EOF
                             fi
                         EOF
 
-                        storageos_etcd_config =  "kvBackend:
+                        storageos_etcd_config =  "tlsEtcdSecretRefName: etcd-client-tls
+    tlsEtcdSecretRefNamespace: storageos-etcd
+    kvBackend:
       backend: 'etcd'
-      address: '#{root_ip}:#{storageos_etcd_client_port}'"
+      address: 'https://#{root_ip}:#{storageos_etcd_client_port}'"
                     end
 
                     config.vm.provision "StorageOSInstall", type: "shell", name: 'Installing StorageOS', inline: <<-EOF
