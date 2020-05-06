@@ -106,6 +106,8 @@ if read_bool_env 'STORAGEOS', true
     end
     storageos_memory = read_env 'STORAGEOS_MEMORY', '256Mi'
     storageos_cli_version = read_env 'STORAGEOS_CLI_VERSION', '1.2.2'
+
+    storageos_etcd_version = read_bool_env 'STORAGEOS_ETCD_VERSION', '3.4.7'
 else
     storageos_version = false
 end
@@ -388,6 +390,10 @@ EOF
             curl -Ls https://raw.githubusercontent.com/storageos/cluster-operator/#{storageos_version}/internal/pkg/image/image.go | grep ContainerImage | grep -v CSIv0 | grep -v NFS | cut -d = -f 2 | tr -d \" | xargs -I IMG docker pull IMG
             which storageos >/dev/null || curl -sSLo /usr/local/bin/storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x /usr/local/bin/storageos
         " unless init
+        
+        config_all.vm.provision "EtcdDownload", type: "shell", name: 'Downloading etcd binaries', inline: "
+            docker image pull quay.io/coreos/etcd:v#{storageos_etcd_version}
+        " if !init && storageos_etcd_version
     end
         
     (1..nodes).each do |node_number|
@@ -658,6 +664,48 @@ EOF
             if storageos_version
 
                 if master
+
+                    storageos_etcd_config = ''
+                    if storageos_etcd_version
+                        storageos_etcd_client_port = 2389
+                        storageos_etcd_peer_port = 2390
+                        storageos_etcd_data_dir = '/var/lib/storageos-etcd'
+
+                        config.vm.provision "StorageOSEtcdInstall", type: "shell", name: 'Installing etcd for StorageOS', inline: <<-EOF
+                            mkdir -p #{storageos_etcd_data_dir}
+                            if [ "$(docker inspect storageos-etcd -f '{{.Config.Image}}')" != "quay.io/coreos/etcd:v#{storageos_etcd_version}" ]; then
+                                docker stop storageos-etcd-0 2>/dev/null && docker rm storageos-etcd-0
+                                docker run -d \
+                                    --restart always \
+                                    -p #{storageos_etcd_client_port}:#{storageos_etcd_client_port} \
+                                    -p #{storageos_etcd_peer_port}:#{storageos_etcd_peer_port} \
+                                    --mount type=bind,source=#{storageos_etcd_data_dir},destination=/etcd-data \
+                                    --name storageos-etcd-0 \
+                                    quay.io/coreos/etcd:v#{storageos_etcd_version} \
+                                    /usr/local/bin/etcd \
+                                    --name storageos-etcd-0 \
+                                    --data-dir /etcd-data \
+                                    --listen-client-urls http://0.0.0.0:#{storageos_etcd_client_port} \
+                                    --advertise-client-urls http://#{root_ip}:#{storageos_etcd_client_port} \
+                                    --listen-peer-urls http://0.0.0.0:#{storageos_etcd_peer_port} \
+                                    --initial-advertise-peer-urls http://#{ip}:#{storageos_etcd_peer_port} \
+                                    --initial-cluster storageos-etcd-0=http://#{root_ip}:#{storageos_etcd_peer_port} \
+                                    --initial-cluster-token storageos-etcd-tkn \
+                                    --initial-cluster-state new \
+                                    --quota-backend-bytes 8589934592 \
+                                    --auto-compaction-retention 100 \
+                                    --auto-compaction-mode revision \
+                                    --log-level info \
+                                    --logger zap \
+                                    --log-outputs stderr
+                            fi
+                        EOF
+
+                        storageos_etcd_config =  "kvBackend:
+      backend: 'etcd'
+      address: '#{root_ip}:#{storageos_etcd_client_port}'"
+                    end
+
                     config.vm.provision "StorageOSInstall", type: "shell", name: 'Installing StorageOS', inline: <<-EOF
                         kubectl get namespaces storageos-operator >/dev/null 2>&1 || kubectl create -f https://github.com/storageos/cluster-operator/releases/download/#{storageos_version}/storageos-operator.yaml
                         kubectl -n storageos-operator get secrets storageos-api >/dev/null 2>&1 || echo "---
@@ -684,12 +732,13 @@ spec:
     k8sDistro: "upstream"
     images:
         nodeContainer: "storageos/node:#{storageos_version}"
+    #{storageos_etcd_config}
     csi:
         enable: true
         deploymentStrategy: deployment
     resources:
         requests:
-        memory: "#{storageos_memory}"' | kubectl apply -f -
+        memory: "#{storageos_memory}"' | tee storageos.yml | kubectl apply -f -
                         which storageos >/dev/null || curl -sSLo /usr/local/bin/storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x /usr/local/bin/storageos
                         grep -q 'export STORAGEOS_USERNAME=' /etc/bash.bashrc || echo 'export STORAGEOS_USERNAME=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiUsername}' | base64 -d) STORAGEOS_PASSWORD=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiPassword}' | base64 -d)' >> /etc/bash.bashrc
                         grep -q 'export STORAGEOS_HOST=' /etc/bash.bashrc || echo 'export STORAGEOS_HOST=$(kubectl -n storageos get svc storageos -o jsonpath='{.spec.clusterIP}')' >> /etc/bash.bashrc

@@ -10,7 +10,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-gluster-pvc
+  name: test-pvc
 spec:
   storageClassName: fast
   accessModes:
@@ -45,7 +45,7 @@ spec:
       volumes:
       - name: www
         persistentVolumeClaim:
-          claimName: test-gluster-pvc
+          claimName: test-pvc
       containers:
       - image: nginx
         name: nginx

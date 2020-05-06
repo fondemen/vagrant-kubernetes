@@ -23,7 +23,7 @@ Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A
 
 ### GlusterFS testing
 
-Invoke `kubectl delete -f kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-storageos.yml` in case you tested with [StorageOS](#storageos-testing).
+Invoke `kubectl delete -f kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-test-file-storageos.yml` in case you tested with [StorageOS](#storageos-testing).
 
 Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-gluster.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 404 (as no file exists to be served).
 
@@ -33,7 +33,7 @@ To load a file, `sudo su -` to get root access, list gluster volumes with `glust
 
 Invoke `kubectl delete -f kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-gluster.yml` in case you tested with [GlusterFS](#glusterfs-testing).
 
-Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file-storageos.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 404 (as no file exists to be served).
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-test-file-storageos.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 404 (as no file exists to be served).
 
 You should be able to see your volume using StorageOS CLI: `storageos volume ls`. To load a file, run the following command: `k exec $(kubectl get pods -l run=nginx -o jsonpath='{.items[0].metadata.name}') -- /bin/sh -c 'echo "Hello World!" > /usr/share/nginx/html/index.html'`. Now `curl -H 'Host: nginx.local' 192.168.2.100` should return "Hello World!".
 
