@@ -795,7 +795,38 @@ spec:
         deploymentStrategy: deployment
     resources:
         requests:
-        memory: "#{storageos_memory}"' | tee storageos.yml | kubectl apply -f -
+        memory: "#{storageos_memory}"' | kubectl apply -f -
+                        kubectl get storageclasses.storage.k8s.io storageos-replicated >/dev/null 2>&1 || echo "---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+    name: storageos-replicated
+parameters:
+    fsType: ext4
+    pool: default
+    storageos.com/replicas: "1"
+provisioner: storageos
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+    name: storageos-retained
+parameters:
+    fsType: ext4
+    pool: default
+provisioner: storageos
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+    name: storageos-replicated-retained
+parameters:
+    fsType: ext4
+    pool: default
+    storageos.com/replicas: "1"
+provisioner: storageos
+reclaimPolicy: Retain' | kubectl apply -f -
                         which storageos >/dev/null || curl -sSLo /usr/local/bin/storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x /usr/local/bin/storageos
                         grep -q 'export STORAGEOS_USERNAME=' /etc/bash.bashrc || echo 'export STORAGEOS_USERNAME=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiUsername}' | base64 -d) STORAGEOS_PASSWORD=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiPassword}' | base64 -d)' >> /etc/bash.bashrc
                         grep -q 'export STORAGEOS_HOST=' /etc/bash.bashrc || echo 'export STORAGEOS_HOST=$(kubectl -n storageos get svc storageos -o jsonpath='{.spec.clusterIP}')' >> /etc/bash.bashrc
