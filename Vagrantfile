@@ -97,7 +97,7 @@ else
 end
 
 if read_bool_env 'STORAGEOS', true
-    storageos_version = read_env 'STORAGEOS_VERSION', '2.0.0' #'1.5.3'
+    storageos_version = read_env 'STORAGEOS_VERSION', '1.5.3'
 
     storageos_v2 = Gem::Version.new(storageos_version) >= Gem::Version.new('2')
     storageos_version = "v#{storageos_version}" if storageos_v2
