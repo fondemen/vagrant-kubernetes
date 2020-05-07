@@ -719,7 +719,7 @@ EOF
 
                         config.vm.provision "StorageOSEtcdInstall", type: "shell", name: 'Installing etcd for StorageOS', inline: <<-EOF
                             mkdir -p #{storageos_etcd_data_dir}
-                            if [ "$(docker inspect storageos-etcd -f '{{.Config.Image}}')" != "quay.io/coreos/etcd:v#{storageos_etcd_version}" ]; then
+                            if [ "$(docker inspect storageos-etcd-0 -f '{{.Config.Image}}')" != "quay.io/coreos/etcd:v#{storageos_etcd_version}" ]; then
                                 docker stop storageos-etcd-0 2>/dev/null && docker rm storageos-etcd-0
                                 docker run -d \
                                     --restart always \
