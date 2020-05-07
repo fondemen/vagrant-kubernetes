@@ -987,3 +987,13 @@ EOF
         end # node cfg
     end if init # node
 end # config
+                        kubectl get storageclasses.storage.k8s.io storageos-replicated >/dev/null 2>&1 || echo '---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+    name: storageos
+parameters:
+    fsType: ext4
+    pool: default
+provisioner: storageos
+---
