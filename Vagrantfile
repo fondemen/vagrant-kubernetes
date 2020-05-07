@@ -97,7 +97,11 @@ else
 end
 
 if read_bool_env 'STORAGEOS', true
-    storageos_version = read_env 'STORAGEOS_VERSION', '1.5.3'
+    storageos_version = read_env 'STORAGEOS_VERSION', '2.0.0' #'1.5.3'
+
+    storageos_v2 = Gem::Version.new(storageos_version) >= Gem::Version.new('2')
+    storageos_version = "v#{storageos_version}" if storageos_v2
+
     storageos_user = read_env 'STORAGEOS_USER', 'storageos'
     storageos_password = read_env 'STORAGEOS_PASSWORD', false
     if !storageos_password
@@ -105,7 +109,8 @@ if read_bool_env 'STORAGEOS', true
         storageos_password = SecureRandom.hex
     end
     storageos_memory = read_env 'STORAGEOS_MEMORY', '256Mi'
-    storageos_cli_version = read_env 'STORAGEOS_CLI_VERSION', '1.2.2'
+    storageos_cli_version = read_env 'STORAGEOS_CLI_VERSION', if storageos_v2 then '2.0.0' else '1.2.2' end
+    storageos_cli_version = "v#{storageos_cli_version}" if Gem::Version.new(storageos_cli_version) >= Gem::Version.new('2')
 
     storageos_etcd_version = read_bool_env 'STORAGEOS_ETCD_VERSION', '3.4.7'
 else
@@ -776,7 +781,13 @@ metadata:
 type: kubernetes.io/storageos
 data:
     apiUsername: $(echo -n '#{storageos_user}' | base64)
-    apiPassword: $(echo -n '#{storageos_password}' | base64)" | kubectl apply -f -
+    apiPassword: $(echo -n '#{storageos_password}' | base64)
+    csiProvisionUsername: c3RvcmFnZW9z
+    csiProvisionPassword: $(echo -n '#{storageos_password}' | base64)
+    csiControllerPublishUsername: c3RvcmFnZW9z
+    csiControllerPublishPassword: $(echo -n '#{storageos_password}' | base64)
+    csiNodePublishUsername: c3RvcmFnZW9z
+    csiNodePublishPassword: $(echo -n '#{storageos_password}' | base64)" | kubectl apply -f -
                         kubectl -n storageos-operator get storageosclusters.storageos.com storageos >/dev/null 2>&1 || echo '---
 apiVersion: "storageos.com/v1"
 kind: StorageOSCluster
@@ -786,6 +797,7 @@ metadata:
 spec:
     secretRefName: "storageos-api" # Reference from the Secret created in the previous step
     secretRefNamespace: "storageos-operator"  # Namespace of the Secret
+    namespace: "kube-system"
     k8sDistro: "upstream"
     images:
         nodeContainer: "storageos/node:#{storageos_version}"
@@ -793,10 +805,22 @@ spec:
     csi:
         enable: true
         deploymentStrategy: deployment
+        enableControllerPublishCreds: true
+        enableNodePublishCreds: true
+        enableProvisionCreds: true
     resources:
         requests:
         memory: "#{storageos_memory}"' | kubectl apply -f -
-                        kubectl get storageclasses.storage.k8s.io storageos-replicated >/dev/null 2>&1 || echo "---
+                        kubectl get storageclasses.storage.k8s.io storageos-replicated >/dev/null 2>&1 || echo '---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+    name: storageos
+parameters:
+    fsType: ext4
+    pool: default
+provisioner: storageos
+---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -828,9 +852,10 @@ parameters:
 provisioner: storageos
 reclaimPolicy: Retain' | kubectl apply -f -
                         which storageos >/dev/null || curl -sSLo /usr/local/bin/storageos https://github.com/storageos/go-cli/releases/download/#{storageos_cli_version}/storageos_linux_amd64 && chmod +x /usr/local/bin/storageos
-                        grep -q 'export STORAGEOS_USERNAME=' /etc/bash.bashrc || echo 'export STORAGEOS_USERNAME=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiUsername}' | base64 -d) STORAGEOS_PASSWORD=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiPassword}' | base64 -d)' >> /etc/bash.bashrc
-                        grep -q 'export STORAGEOS_HOST=' /etc/bash.bashrc || echo 'export STORAGEOS_HOST=$(kubectl -n storageos get svc storageos -o jsonpath='{.spec.clusterIP}')' >> /etc/bash.bashrc
-                        [ -f /etc/bash_completion.d/storageos ] || storageos install-bash-completion --stdout > /etc/bash_completion.d/storageos
+                        grep -q 'export STORAGEOS_#{if storageos_v2 then 'USER_NAME' else 'USERNAME' end}=' /etc/bash.bashrc || echo 'export STORAGEOS_#{if storageos_v2 then 'USER_NAME' else 'USERNAME' end}=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiUsername}' | base64 -d) STORAGEOS_PASSWORD=$(kubectl -n storageos-operator get secrets storageos-api -o jsonpath='{.data.apiPassword}' | base64 -d)' >> /etc/bash.bashrc
+                        grep -q 'export STORAGEOS_#{if storageos_v2 then 'ENDPOINTS' else 'HOST' end}=' /etc/bash.bashrc || echo 'export STORAGEOS_#{if storageos_v2 then 'ENDPOINTS' else 'HOST' end}=$(kubectl -n kube-system get svc storageos -o jsonpath='{.spec.clusterIP}:{.spec.ports[0].port}')' >> /etc/bash.bashrc
+                        mkdir -p #{vagrant_home}/.cache && chown #{vagrant_user}:#{vagrant_user} #{vagrant_home}/.cache
+                        #{if storageos_v2 then '' else '[ -f /etc/bash_completion.d/storageos ] || storageos install-bash-completion --stdout > /etc/bash_completion.d/storageos' end}
 EOF
                 end
             end # StorageOS
@@ -987,13 +1012,3 @@ EOF
         end # node cfg
     end if init # node
 end # config
-                        kubectl get storageclasses.storage.k8s.io storageos-replicated >/dev/null 2>&1 || echo '---
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-    name: storageos
-parameters:
-    fsType: ext4
-    pool: default
-provisioner: storageos
----

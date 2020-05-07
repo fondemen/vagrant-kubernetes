@@ -14,7 +14,7 @@ metadata:
 spec:
   storageClassName: fast
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
   resources:
     requests:
       storage: 5Gi
@@ -26,7 +26,7 @@ metadata:
     run: nginx
   name: nginx-deploy
 spec:
-  replicas: 2
+  replicas: 1 # StorageOS doesn't support ReadWriteMany nor ReadOnlyMany as from v2
   selector:
     matchLabels:
       run: nginx
