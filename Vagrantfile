@@ -220,7 +220,7 @@ Vagrant.configure("2") do |config_all|
 
     # Generic
     config_all.vm.provision "Aliases", :type => "shell", :name => "Setting up aliases", :inline => "
-        grep -q 'alias ll=' || echo 'alias ll=\"ls -alh\"' >> /etc/bash.bashrc
+        grep -q 'alias ll=' /etc/bash.bashrc || echo 'alias ll=\"ls -alh\"' >> /etc/bash.bashrc
     "
     config_all.vm.provision "Upgrade", :type => "shell", :name => "Upgrading system", :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
@@ -313,8 +313,8 @@ EOF
                 apt-mark hold kubelet kubeadm kubectl
             fi
             [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
-            grep -q 'alias k=' || echo 'alias k=kubectl' >> /etc/bash.bashrc
-            grep -q 'complete -F __start_kubectl k' || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
+            grep -q 'alias k=' /etc/bash.bashrc || echo 'alias k=kubectl' >> /etc/bash.bashrc
+            grep -q 'complete -F __start_kubectl k' /etc/bash.bashrc || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
             "
         config_all.vm.provision "K8SImages", type: "shell", name: 'Downloading Kubernetes images', inline: "
             kubeadm config images pull
@@ -883,7 +883,7 @@ roleRef:
   name: tiller-manager
   apiGroup: rbac.authorization.k8s.io' | kubectl apply -f -
                             sudo -u #{vagrant_user} helm init --service-account tiller --tiller-namespace #{tiller_namespace}
-                            grep -q 'alias helm=' || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
+                            grep -q 'alias helm=' /etc/bash.bashrc || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
                             sudo -u #{vagrant_user} helm repo update
                             sudo -u #{vagrant_user} helm init --upgrade
                         EOF
