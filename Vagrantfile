@@ -346,14 +346,6 @@ EOF
             " unless init
         end
 
-        config_all.vm.provision "Nginx", type: "shell", name: 'Downloading nginx', inline: "
-            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-            export DEBIAN_FRONTEND=noninteractive
-            which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
-            systemctl stop nginx
-            systemctl disable nginx
-        " if traefik_version && !init
-
         config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
             which helm >/dev/null 2>&1 ||
                 ( echo \"Downloading and installing Helm #{helm_version}\"
@@ -706,13 +698,26 @@ additionalArguments:
 - "--providers.kubernetesingress"
 
 service:
+  enabled: false
   type: ClusterIP
-  spec:
-    clusterIP: "10.104.140.71"
 
 ports:
+  web:
+    expose: false
+    port: 80
+    hostPort: 80
   websecure:
     expose: false
+
+securityContext:
+  capabilities:
+    drop: [ALL]
+    add: [NET_BIND_SERVICE]
+  runAsNonRoot: false
+  runAsGroup: 0
+  runAsUser: 0
+podSecurityContext:
+  fsGroup: 0
 
 #persistence:
 #  storageClass: "glusterfs"
@@ -730,37 +735,6 @@ nodeSelector:
 ingressRoute:
   dashboard:
     enabled: true' | helm install -n traefik traefik traefik/traefik -f -
-                        which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
-                        systemctl enable nginx
-                        systemctl start nginx
-                        if [ ! -e /etc/nginx/sites-enabled/kubernetes-proxy.conf ]; then
-                            cat > /etc/nginx/sites-available/kubernetes-proxy.conf <<EOL
-server {
-    listen 80;
-    listen [::]:80;
-
-    access_log /var/log/nginx/kubernetes-proxy-access.log;
-    error_log /var/log/nginx/kubernetes-proxy-error.log;
-
-    location / {
-        proxy_pass http://10.104.140.71:80;
-    }
-
-    client_max_body_size 200M; # Pour pouvoir uploader des fichiers volumineux sur minio
-
-    proxy_set_header Upgrade           \\$http_upgrade;
-    proxy_set_header Connection        "upgrade";
-    proxy_set_header Host              \\$host;
-    proxy_set_header X-Real-IP         \\$remote_addr;
-    proxy_set_header X-Forwarded-For   \\$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \\$scheme;
-    proxy_set_header X-Forwarded-Host  \\$host;
-    proxy_set_header X-Forwarded-Port  \\$server_port;
-}
-EOL
-                            ln -s /etc/nginx/sites-available/kubernetes-proxy.conf /etc/nginx/sites-enabled/kubernetes-proxy.conf
-                            service nginx restart
-                        fi
 EOF
                     config.vm.provision "TraefikDashboard", :type => "shell", :name => "Exposing Traefik Dashboard on http://#{root_ip}/dashboard", :inline => <<-EOF
                         kubectl -n traefik get ingressroute dashboard >/dev/null 2>&1 || echo '---
