@@ -46,18 +46,19 @@ master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for m
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
-box = read_env 'BOX', 'fondement/k8s' # initially was 'bento/debian-10' # must be debian-based
+docker_version = read_env 'DOCKER_VERSION', '19.03.8' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
+docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
+
+k8s_version = read_env 'K8S_VERSION', '1.18'
+k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
+
+box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.18')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
 vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
-
-docker_version = read_env 'DOCKER_VERSION', '19.03.8' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
-docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
-
-k8s_version = read_env 'K8S_VERSION', '1.18.2'
 
 cni = (read_env 'CNI', 'calico').downcase
 calico = false
@@ -70,7 +71,8 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end
-calico_version = read_env 'CALICO_VERSION', '3.13' if calico
+calico_version = read_env 'CALICO_VERSION', 'latest' if calico
+calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 
 if read_bool_env 'GLUSTER', true
     raise "There should be at least 3 nodes in an Heketi cluster" unless nodes >= 3
@@ -119,7 +121,7 @@ end
 
 traefik_version = read_env 'TRAEFIK', '2.2'
 
-helm_version = read_env 'HELM_VERSION', '3.2.0' # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', '3.2.1' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
@@ -206,6 +208,7 @@ Vagrant.configure("2") do |config_all|
     # forward ssh agent to easily ssh into the different machines
     config_all.ssh.forward_agent = true
     config_all.vm.box = box
+    config_all.vm.box_version = "0.#{k8s_short_version}" if box == 'fondement/k8s' && k8s_short_version
     begin config_all.vm.box_url = box_url if box_url rescue nil end
 
     config_all.vm.synced_folder ".", "/vagrant", disabled: true
@@ -327,7 +330,7 @@ EOF
     end
 
     config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
-        curl -sL https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml | grep 'image:' | sed 's/image://' | xargs -I IMG docker pull IMG
+        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
         " if calico_version && !init
 
     # Gluster installation
@@ -367,14 +370,6 @@ EOF
             " unless init
         end
 
-        config_all.vm.provision "Nginx", type: "shell", name: 'Downloading nginx', inline: "
-            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-            export DEBIAN_FRONTEND=noninteractive
-            which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
-            systemctl stop nginx
-            systemctl disable nginx
-        " if traefik_version && !init
-
         config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
             which helm >/dev/null 2>&1 ||
                 ( echo \"Downloading and installing Helm #{helm_version}\"
@@ -385,7 +380,7 @@ EOF
         " if helm_version && !init
 
         config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-            docker image pull traefik:#{traefik_version}
+            docker image pull -q traefik:#{traefik_version}
         " if traefik_version && !init
     end
 
@@ -467,7 +462,7 @@ EOF
                     cidr = if flannel then '10.244.0.0/16' elsif calico then '192.168.0.0/16' else raise "Undefined CNI provider (try using CIDR env var)" end
 
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=#{cidr} | tee /root/k8sjoin.txt; fi
+                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=#{cidr} #{if k8s_version.split('.').length > 2 then "--kubernetes-version #{k8s_version}" else '' end} | tee /root/k8sjoin.txt; fi
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
                         "
@@ -477,7 +472,7 @@ EOF
                         "
                     elsif calico
                         config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
-                            kubectl get pods --namespace kube-system | grep -q calico || kubectl apply -f https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml
+                            kubectl get pods --namespace kube-system | grep -q calico || kubectl apply -f #{calico_url}
                         "
                     end 
 
@@ -933,13 +928,26 @@ additionalArguments:
 - "--providers.kubernetesingress"
 
 service:
+  enabled: false
   type: ClusterIP
-  spec:
-    clusterIP: "10.104.140.71"
 
 ports:
+  web:
+    expose: false
+    port: 80
+    hostPort: 80
   websecure:
     expose: false
+
+securityContext:
+  capabilities:
+    drop: [ALL]
+    add: [NET_BIND_SERVICE]
+  runAsNonRoot: false
+  runAsGroup: 0
+  runAsUser: 0
+podSecurityContext:
+  fsGroup: 0
 
 #persistence:
 #  storageClass: "glusterfs"
@@ -957,37 +965,6 @@ nodeSelector:
 ingressRoute:
   dashboard:
     enabled: true' | helm install -n traefik traefik traefik/traefik -f -
-                        which nginx >/dev/null || apt-get install --yes nginx && rm -f /etc/nginx/sites-enabled/default
-                        systemctl enable nginx
-                        systemctl start nginx
-                        if [ ! -e /etc/nginx/sites-enabled/kubernetes-proxy.conf ]; then
-                            cat > /etc/nginx/sites-available/kubernetes-proxy.conf <<EOL
-server {
-    listen 80;
-    listen [::]:80;
-
-    access_log /var/log/nginx/kubernetes-proxy-access.log;
-    error_log /var/log/nginx/kubernetes-proxy-error.log;
-
-    location / {
-        proxy_pass http://10.104.140.71:80;
-    }
-
-    client_max_body_size 200M; # Pour pouvoir uploader des fichiers volumineux sur minio
-
-    proxy_set_header Upgrade           \\$http_upgrade;
-    proxy_set_header Connection        "upgrade";
-    proxy_set_header Host              \\$host;
-    proxy_set_header X-Real-IP         \\$remote_addr;
-    proxy_set_header X-Forwarded-For   \\$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \\$scheme;
-    proxy_set_header X-Forwarded-Host  \\$host;
-    proxy_set_header X-Forwarded-Port  \\$server_port;
-}
-EOL
-                            ln -s /etc/nginx/sites-available/kubernetes-proxy.conf /etc/nginx/sites-enabled/kubernetes-proxy.conf
-                            service nginx restart
-                        fi
 EOF
                     config.vm.provision "TraefikDashboard", :type => "shell", :name => "Exposing Traefik Dashboard on http://#{root_ip}/dashboard", :inline => <<-EOF
                         kubectl -n traefik get ingressroute dashboard >/dev/null 2>&1 || echo '---

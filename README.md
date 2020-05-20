@@ -2,6 +2,7 @@
 Starting up a Kubernetes cluster with Vagrant and VirtualBox.
 
 ```
+vagrant box update # can fail safely
 vagrant up
 # Now you can login
 vagrant ssh
@@ -15,7 +16,7 @@ Cluster can merly be stopped by issuing `vagrant halt` and later restarted with 
 
 [PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs" or [StorageOS](https://storageos.com/) using storage class "fast". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly. A licence is necessary after 24h in case you're using StorageOS v2+.
 
-[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 30080, proxied from port 80 by [nginx](https://nginx.org/). The traefik dashboard is available at http://192.168.2.100/dashboard/.
+[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.2.100/dashboard/.
 
 Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A-Kubernetes) for the installation procedure...
 
