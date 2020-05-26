@@ -432,11 +432,11 @@ EOF
                         "
                     if flannel
                         config.vm.provision "Flannel", type: "shell", name: 'Setting up Flannel CNI', inline: "
-                            kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
+                            kubectl get pods --namespace kube-system 2>/dev/null | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
                         "
                     elsif calico
                         config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
-                            kubectl get pods --namespace kube-system | grep -q calico || kubectl apply -f #{calico_url}
+                            kubectl get pods --namespace kube-system 2>/dev/null | grep -q calico || kubectl apply -f #{calico_url}
                         "
                     end 
 
@@ -597,7 +597,7 @@ EOF
 
                     if master
                         config.vm.provision "HeketiForK8s", :type => "shell", :name => "Setting-up Heketi for Kubernetes", :inline => <<-EOF
-                            kubectl get storageclasses.storage.k8s.io | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
+                            kubectl get storageclasses.storage.k8s.io 2>/dev/null | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
 apiVersion: v1
 kind: Secret
 metadata:
