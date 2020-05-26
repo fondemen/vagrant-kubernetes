@@ -51,6 +51,9 @@ docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.18'
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
+k8s_db_version = read_env 'K8S_DB_VERSION', 'latest'
+k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
+k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
 box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.18')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
@@ -120,6 +123,7 @@ else
 end
 
 traefik_version = read_env 'TRAEFIK', '2.2'
+traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
 helm_version = read_env 'HELM_VERSION', '3.2.1' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
@@ -327,6 +331,10 @@ EOF
         config_all.vm.provision "K8SImages", type: "shell", name: 'Downloading Kubernetes images', inline: "
             kubeadm config images pull
         " unless init
+
+        config_all.vm.provision "K8SDashboardImages", type: "shell", name: 'Downloading Kubernetes Dashboard images', inline: "
+            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+        " unless init
     end
 
     config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
@@ -468,11 +476,11 @@ EOF
                         "
                     if flannel
                         config.vm.provision "Flannel", type: "shell", name: 'Setting up Flannel CNI', inline: "
-                            kubectl get pods --namespace kube-system | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
+                            kubectl get pods --namespace kube-system 2>/dev/null | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
                         "
                     elsif calico
                         config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
-                            kubectl get pods --namespace kube-system | grep -q calico || kubectl apply -f #{calico_url}
+                            kubectl get pods --namespace kube-system 2>/dev/null | grep -q calico || kubectl apply -f #{calico_url}
                         "
                     end 
 
@@ -481,6 +489,28 @@ EOF
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the Kubernetes cluster', inline: "
                         [ -d ~/.kube ] || scp -o StrictHostKeyChecking=no -r #{root_hostname}:~/.kube .
                         [ -f /etc/kubernetes/kubelet.conf ] || kubeadm join --discovery-file .kube/config
+                    "
+                end
+
+                if master && k8s_db_version && k8s_db_port && k8s_db_port > 0
+                    config.vm.provision "K8SDashboard", type: "shell", name: 'Installing the Kubernetes dashboard', inline: "
+                    kubectl get namespaces kubernetes-dashboard >/dev/null 2>&1 || (
+                        kubectl apply -f #{k8s_db_url}
+                        echo '---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+    name: kubernetes-dashboard-admin
+    namespace: kubernetes-dashboard
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: kubernetes-dashboard
+    namespace: kubernetes-dashboard' | kubectl apply -f -
+                    )
                     "
                 end
             end # k8s
@@ -633,12 +663,17 @@ EOF
 
                     if master
                         config.vm.provision "HeketiForK8s", :type => "shell", :name => "Setting-up Heketi for Kubernetes", :inline => <<-EOF
-                            kubectl get storageclasses.storage.k8s.io | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
+                            kubectl get storageclasses.storage.k8s.io 2>/dev/null | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
+apiVersion: v1
+kind: Namespace
+metadata:
+    name: heketi
+---
 apiVersion: v1
 kind: Secret
 metadata:
     name: heketi-secret
-    namespace: default
+    namespace: heketi
 type: kubernetes.io/glusterfs
 data:
     key: $(echo -n #{heketi_admin_secret} | base64)
@@ -656,7 +691,7 @@ parameters:
     clusterid: \\"$CLUSTER_ID\\"
     restauthenabled: \\"true\\"
     restuser: \\"admin\\"
-    secretNamespace: default
+    secretNamespace: heketi
     secretName: \\"heketi-secret\\"
     volumetype: \\"replicate:#{gluster_replicas}\\"" | kubectl apply -f -
 EOF
@@ -936,6 +971,14 @@ ports:
     expose: false
     port: 80
     hostPort: 80
+  #{if traefik_db_port && traefik_db_port > 0 then "traefik:
+    expose: false
+    port: #{traefik_db_port}
+    hostPort: #{traefik_db_port}" end}
+  #{if k8s_version && k8s_db_port && k8s_db_port > 0 then "dashboard:
+    expose: false
+    port: #{k8s_db_port}
+    hostPort: #{k8s_db_port}" end}
   websecure:
     expose: false
 
@@ -966,7 +1009,7 @@ ingressRoute:
   dashboard:
     enabled: true' | helm install -n traefik traefik traefik/traefik -f -
 EOF
-                    config.vm.provision "TraefikDashboard", :type => "shell", :name => "Exposing Traefik Dashboard on http://#{root_ip}/dashboard", :inline => <<-EOF
+                    config.vm.provision "TraefikDashboard", :type => "shell", :name => "Exposing Traefik Dashboard on http://#{root_ip}:#{traefik_db_port}/", :inline => <<-EOF
                         kubectl -n traefik get ingressroute dashboard >/dev/null 2>&1 || echo '---
 apiVersion: traefik.containo.us/v1alpha1
 kind: IngressRoute
@@ -975,14 +1018,53 @@ metadata:
   namespace: traefik
 spec:
   entryPoints:
-  - web
+  - traefik
   routes:
-  - match: PathPrefix(`/dashboard`) || PathPrefix(`/api`)
+  - match: HostRegexp(`{host:.+}`)
     kind: Rule
     services:
     - name: api@internal
       kind: TraefikService' | kubectl apply -f -
 EOF
+                    
+                    if k8s_db_port && k8s_db_port > 0
+                        config.vm.provision "KubernetesDashboard", :type => "shell", :name => "Exposing Kubernetes Dashboard on http://#{root_ip}:#{k8s_db_port}/", :inline => <<-EOF
+                          kubectl -n kubernetes-dashboard get ingressroute dashboard >/dev/null 2>&1 || (
+                            TOKEN=$(kubectl -n kubernetes-dashboard get secrets $(kubectl -n kubernetes-dashboard get secrets --no-headers -o custom-columns=":metadata.name" | grep kubernetes-dashboard-token-) -o jsonpath='{.data.token}' | base64 -d)
+                            echo "---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: db-bearer-token
+  namespace: kubernetes-dashboard
+spec:
+  headers:
+    customRequestHeaders:
+      Authorization: \\"Bearer $TOKEN\\"
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dashboard
+  namespace: kubernetes-dashboard
+spec:
+  entryPoints:
+    - dashboard
+  routes:
+    - match: HostRegexp(\\`{host:.+}\\`)
+      kind: Rule
+      middlewares:
+        - name: db-bearer-token
+          namespace: kubernetes-dashboard
+      services:
+        - name: kubernetes-dashboard
+          namespace: kubernetes-dashboard
+          kind: Service
+          port: 80
+" | kubectl apply -f -
+                          )
+EOF
+                    end # K8S Dashboard over traefik
                 end
             end # Traefik
             

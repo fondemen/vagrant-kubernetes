@@ -10,13 +10,13 @@ vagrant ssh
 kubectl get pods
 ```
 
-Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables).
+Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kuberbetes Dashboard with admin rigths is availabble at http://192.168.2.100:8001/
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
 [PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs" or [StorageOS](https://storageos.com/) using storage class "fast". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly. A licence is necessary after 24h in case you're using StorageOS v2+.
 
-[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.2.100/dashboard/.
+[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.2.100:9000/.
 
 Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A-Kubernetes) for the installation procedure...
 
@@ -51,6 +51,14 @@ Default is 19.03.8.
 #### K8S_VERSION
 The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables kubernetes installation.
 Default is 1.18.2.
+
+#### K8S_DB_PORT
+The port at which exposing the Kubernetes Dashboard. Traefik must be [enabled](#traefik) for the dashboard to be visible. Set to 0 to disable.
+Default is 8001.
+
+#### K8S_DB_VERSION
+The version of the dashboard to run. To be found at https://github.com/kubernetes/dashboard/tags (avoiding the initial v). Set to latest to get the latest version, or 0 to disable.
+Default is latest.
 
 #### CNI
 The CNI provider to use. Currently supported options are flannel and calico.
@@ -121,6 +129,10 @@ Default is 1.2.2.
 #### TRAEFIK
 The version of Traefik to install. Check tags on [Docker Hub](https://hub.docker.com/_/traefik).
 Default is 2.2.
+
+#### TRAEFIK_DB_PORT
+The port at which exposing the Traefik dashoard. Set to 0 to disable.
+Default is 9000.
 
 ### Nodes configuration
 
