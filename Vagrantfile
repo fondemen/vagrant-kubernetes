@@ -76,6 +76,7 @@ case cni
 end
 calico_version = read_env 'CALICO_VERSION', 'latest' if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
+calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
 if read_bool_env 'GLUSTER', true
     raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
@@ -318,7 +319,8 @@ EOF
 
     config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
         curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
-        " if calico_version && !init
+        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+    " if calico_version && !init
 
     # Gluster installation
     if gluster_version
@@ -444,7 +446,11 @@ EOF
                         "
                     elsif calico
                         config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
-                            kubectl get pods --namespace kube-system 2>/dev/null | grep -q calico || kubectl apply -f #{calico_url}
+                            kubectl -n kube-system get daemonsets | grep calico 2>/dev/null | grep -q calico || kubectl apply -f #{calico_url}
+                        "
+                        config.vm.provision "CalicoCtl", type: "shell", name: 'Setting up calicoctl', inline: "
+                            kubectl -n kube-system get pod calicoctl >/dev/null 2>/dev/null || kubectl apply -f #{calicoctl_url}
+                            grep -q 'alias calicoctl=' /etc/bash.bashrc || echo 'alias calicoctl=\"kubectl exec -ti -n kube-system calicoctl -- /calicoctl\"' >> /etc/bash.bashrc
                         "
                     end 
 
