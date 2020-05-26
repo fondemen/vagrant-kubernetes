@@ -78,7 +78,7 @@ calico_version = read_env 'CALICO_VERSION', 'latest' if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 
 if read_bool_env 'GLUSTER', true
-    raise "There should be at least 3 nodes in an Heketi cluster" unless nodes >= 3
+    raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
 
     gluster_version = read_env 'GLUSTER_VERSION', '7'
     gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
@@ -448,6 +448,12 @@ EOF
                         "
                     end 
 
+                    if nodes < 3
+                        config.vm.provision "AllowPodOnMaster", type: "shell", name: 'Allowing pods to be scheduled on master node', inline: "
+                            kubectl get nodes #{root_hostname} -o jsonpath='{.spec.taints}' | grep -q NoSchedule && kubectl taint node #{root_hostname} node-role.kubernetes.io/master:NoSchedule- || /bin/true
+                        "
+                    end
+
                 else
                     # Joining K8s
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the Kubernetes cluster', inline: "
@@ -663,7 +669,7 @@ EOF
                 end # Heketi
             end # Gluster
 
-            if helm_version
+            if k8s_version && helm_version
                 if master
                     config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
                         which helm >/dev/null 2>&1 ||
@@ -721,7 +727,7 @@ roleRef:
 
 
 
-            if traefik_version
+            if k8s_version && helm_version && traefik_version
                 if master
                     config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
                         helm repo list | grep -q traefik || ( helm repo add traefik https://containous.github.io/traefik-helm-chart && helm repo update )
