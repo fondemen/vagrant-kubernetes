@@ -116,6 +116,8 @@ host_itf = read_env 'ITF', false
 leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
+expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
+
 guest_additions = read_bool_env 'GUEST_ADDITIONS', false
 
 public = read_bool_env 'PUBLIC', false
@@ -811,6 +813,8 @@ spec:
     - name: api@internal
       kind: TraefikService' | kubectl apply -f -
 EOF
+
+                    config.vm.network "forwarded_port", guest: traefik_db_port, host: traefik_db_port if expose_db_ports
                     
                     if k8s_db_port && k8s_db_port > 0
                         config.vm.provision "KubernetesDashboard", :type => "shell", :name => "Exposing Kubernetes Dashboard on http://#{root_ip}:#{k8s_db_port}/", :inline => <<-EOF
@@ -849,6 +853,8 @@ spec:
 " | kubectl apply -f -
                           )
 EOF
+
+                        config.vm.network "forwarded_port", guest: k8s_db_port, host: k8s_db_port if expose_db_ports
                     end # K8S Dashboard over traefik
                 end
             end # Traefik
