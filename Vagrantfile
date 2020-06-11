@@ -432,6 +432,23 @@ EOF
             modprobe drbd
             grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd > /etc/modules-load.d/modules.conf 
         "
+        config_all.vm.provision "ZFSInstall", :type => "shell", :name => "Installing ZFS kernel module", :inline => "
+            lsmod | grep -qi zfs || (
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                grep -q contrib /etc/apt/sources.list || sed -i \"s#$(lsb_release -cs) main#$(lsb_release -cs) main contrib#g\" /etc/apt/sources.list
+                grep -q backports /etc/apt/sources.list || (
+                    echo \"deb http://deb.debian.org/debian $(lsb_release -cs)-backports main\" >> /etc/apt/sources.list
+                )
+                apt-get update 
+                apt-get install -y linux-headers-`uname -r`
+                echo 'Installing ZFS ; this might take a while, be patient...'
+                apt-get install -y -t $(lsb_release -cs)-backports dkms spl-dkms
+                echo 'Installing ZFS ; this might take a while, be patient...'
+                apt-get install -y -t $(lsb_release -cs)-backports zfs-dkms zfsutils-linux
+                modprobe zfs
+            )
+        "
 
     end
         
