@@ -106,6 +106,9 @@ if read_bool_env 'LINSTOR', true
     linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "1.7.1-2" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
+    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.23-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
+    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.13.1"
 else
     linstor_kube_version = false
 end
@@ -386,15 +389,48 @@ EOF
     # Linstor / DRBBD installation
     if linstor_kube_version
 
-        config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD", :inline => "
+        config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD kernel module", :inline => "
+            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+            export DEBIAN_FRONTEND=noninteractive
             lsmod | grep -i drbd 1>/dev/null 2>&1 || (
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                apt-get update
-                apt-get install --yes drbd-utils
-                modprobe drbd
-                grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd > /etc/modules-load.d/modules.conf 
+                mkdir drbd
+                cd drbd
+                dpkg-query -S drbd-utils >/dev/null || (
+                    [ -f drbd-utils_#{drbd_utils_version}-1_amd64.deb ] || (
+                        [ -d drbd-utils-#{drbd_utils_version} ] || (
+                            curl -sL https://github.com/LINBIT/drbd-utils/archive/v#{drbd_utils_version}.tar.gz | tar -xz
+                            curl -sL https://www.linbit.com/downloads/drbd/utils/drbd-utils-#{drbd_utils_version}.tar.gz | tar -xz
+                        )
+                        cd drbd-utils-#{drbd_utils_version}
+                        apt-get install -y dh-systemd docbook-xsl flex xsltproc po4a
+                        ./autogen.sh
+                        dpkg-buildpackage -rfakeroot -b -uc
+                        cd ..
+                    )
+                    dpkg -i drbd-utils_#{drbd_utils_version}-1_amd64.deb
+                )
+                [ -f drbd-dkms_#{drbd_version}_all.deb ] || (
+                    echo 'DRDB kernel module has to be compiled ; please, be patient'
+                    [ -d drbd-#{drbd_version} ] || curl -sL https://www.linbit.com/downloads/drbd/#{drbd_simple_version}/drbd-#{drbd_version}.tar.gz | tar -xz
+                    [ -d drdb-#{drbd_version}/debian ] || (
+                        curl -sL https://github.com/LINBIT/drbd/archive/drbd-#{drbd_version}.tar.gz | tar -xz
+                        mv drbd-drbd-#{drbd_version}/debian drbd-#{drbd_version}/debian
+                        rm -rf drbd-drbd-#{drbd_version}
+                    )
+                    cd drbd-#{drbd_version}
+                    # check https://dev.tranquil.it/wiki/Xenserver_-_Cr%C3%A9er_des_paquets_Debian_drbd9
+                    make
+                    make clean
+                    apt-get install -y debhelper
+                    dpkg-buildpackage -rfakeroot -b -uc
+                    cd ..
+                )
+                dpkg -i drbd-dkms_#{drbd_version}_all.deb
+                cd ..
+                rm -rf drbd
             )
+            modprobe drbd
+            grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd > /etc/modules-load.d/modules.conf 
         "
 
     end
@@ -877,9 +913,6 @@ storkScheduler:
 
     
 csi:
-  image:
-    linstorCsiPlugin:
-      tag: v1.7.1
   controller:
     nodeSelector:
       node-role.kubernetes.io/master: ""
@@ -892,12 +925,14 @@ csi:
       key: node-role.kubernetes.io/master 
     - effect: NoSchedule
       key: node.kubernetes.io/unschedulable' | helm -n #{linstor_ns} upgrade --install linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor -f -
-                        grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"kubectl exec -ti -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor\"' >> /etc/bash.bashrc
+                        grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor\"' >> /etc/bash.bashrc
+                        kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
+                        until kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node list >/dev/null 2>&1; do sleep 3; done
 EOF
                 end # master
 
                 config.vm.provision "LinstorAddNode", :type => "shell", :name => "Adding #{hostname} to Linstor", :inline => "
-                    ssh root@#{root_hostname} 'kubectl exec -ti -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node create #{hostname} #{ip}'
+                    ssh root@#{root_hostname} 'kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node list' | grep #{hostname} | grep -q #{ip} || ssh root@#{root_hostname} 'kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node create #{hostname} #{ip}'
                 "
             end # linstor
 
