@@ -78,7 +78,7 @@ calico_version = read_env 'CALICO_VERSION', 'latest' if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
-if read_bool_env 'GLUSTER', true
+if read_bool_env 'GLUSTER', false
     raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
 
     gluster_version = read_env 'GLUSTER_VERSION', '7'
@@ -100,6 +100,14 @@ if read_bool_env 'GLUSTER', true
 else
     gluster_version = false
     heketi_version = false
+end
+
+if read_bool_env 'LINSTOR', true
+    linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "1.7.1-2" # check https://github.com/kvaps/kube-linstor/releases
+    linstor_ns = read_env 'LINSTOR_NS', "linstor"
+    linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
+else
+    linstor_kube_version = false
 end
 
 traefik_version = read_env 'TRAEFIK', '2.2'
@@ -373,6 +381,22 @@ EOF
         config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
             docker image pull -q traefik:#{traefik_version}
         " if traefik_version && !init
+    end
+
+    # Linstor / DRBBD installation
+    if linstor_kube_version
+
+        config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD", :inline => "
+            lsmod | grep -i drbd 1>/dev/null 2>&1 || (
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                apt-get update
+                apt-get install --yes drbd-utils
+                modprobe drbd
+                grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd > /etc/modules-load.d/modules.conf 
+            )
+        "
+
     end
         
     (1..nodes).each do |node_number|
@@ -733,7 +757,149 @@ roleRef:
                 end
             end # Helm
 
+            if linstor_kube_version
+                if master
 
+                    config.vm.provision "LinstorNS", :type => "shell", :name => "Setting-up namespace for Linstor", :inline => "
+                        kubectl get namespaces #{linstor_ns} > /dev/null 2>&1 || kubectl create namespace #{linstor_ns}
+                    "
+                    config.vm.provision "LinstorDB", :type => "shell", :name => "Setting-up database for Linstor", :inline => <<-EOF
+                        kubectl -n #{linstor_ns} get svc linstor-db >/dev/null 2>&1 || echo '---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: linstor-db
+  namespace: #{linstor_ns}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: linstor-db
+  template:
+    metadata:
+      labels:
+        app: linstor-db
+    spec:
+      volumes:
+      - name: linstor-postgresql-volume
+        hostPath:
+          path: /var/lib/linstor/db
+          type: DirectoryOrCreate
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Equal
+        effect: NoExecute
+      - key: node-role.kubernetes.io/master
+        operator: Equal
+        effect: NoSchedule
+      containers:
+      - name: postgres
+        image: postgres:12
+        volumeMounts:
+        - name: linstor-postgresql-volume
+          mountPath: /var/lib/postgresql/data
+        ports:
+        - containerPort: 5432 
+        env:
+        - name: POSTGRES_DB
+          value: linstor
+        - name: POSTGRES_USER
+          value: linstor
+        - name: POSTGRES_PASSWORD
+          value: #{linstor_password}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: linstor-db
+  namespace: #{linstor_ns}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: linstor-db
+  ports:
+  - name: postgresql
+    protocol: TCP
+    port: 5432
+    targetPort: 5432' | kubectl apply -f -
+EOF
+
+                    config.vm.provision "Linstor", :type => "shell", :name => "Setting-up Linstor", :inline => <<-EOF
+                        [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz 
+                        helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo '
+controller:
+  db:
+    user: linstor
+    password: #{linstor_password}
+    connectionUrl: jdbc:postgresql://linstor-db/linstor
+  nodeSelector:
+    node-role.kubernetes.io/master: ""
+  tolerations: 
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+
+ssl:
+  enabled: false
+stunnel:
+  enabled: true
+    
+satellite:
+  ssl:
+    enabled: false
+  tolerations: 
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master 
+  - effect: NoSchedule
+    key: node.kubernetes.io/unschedulable
+
+stork:
+    replicaCount: #{if nodes >= 5 then 3 else 1 end}
+    tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/master 
+    - effect: NoSchedule
+      key: node.kubernetes.io/unschedulable
+    #{if nodes < 5 then "nodeSelector:
+      node-role.kubernetes.io/master: \"\"" else "" end}
+
+storkScheduler:
+    replicaCount: #{if nodes >= 5 then 3 else 1 end}
+    tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/master 
+    - effect: NoSchedule
+      key: node.kubernetes.io/unschedulable
+    #{if nodes < 5 then "nodeSelector:
+      node-role.kubernetes.io/master: \"\"" else "" end}
+
+    
+csi:
+  image:
+    linstorCsiPlugin:
+      tag: v1.7.1
+  controller:
+    nodeSelector:
+      node-role.kubernetes.io/master: ""
+    tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/master 
+  node:
+    tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/master 
+    - effect: NoSchedule
+      key: node.kubernetes.io/unschedulable' | helm -n #{linstor_ns} upgrade --install linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor -f -
+                        grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"kubectl exec -ti -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor\"' >> /etc/bash.bashrc
+EOF
+                end # master
+
+                config.vm.provision "LinstorAddNode", :type => "shell", :name => "Adding #{hostname} to Linstor", :inline => "
+                    ssh root@#{root_hostname} 'kubectl exec -ti -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node create #{hostname} #{ip}'
+                "
+            end # linstor
 
             if k8s_version && helm_version && traefik_version
                 if master
