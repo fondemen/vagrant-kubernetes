@@ -1,6 +1,8 @@
 export BOX='bento/debian-10'
 export UPGRADE=true
 export GUEST_ADDITIONS=true
+export GLUSTER=true
+export LINSTOR=true
 export INIT=false
 vagrant box update
 vagrant up

@@ -108,7 +108,8 @@ if read_bool_env 'LINSTOR', true
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
     drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.23-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
-    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.13.1"
+    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.13.1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    linstor_pg_version = read_env 'LINSTOR_PG_VERSION', "12" # check https://hub.docker.com/_/postgres?tab=description
 else
     linstor_kube_version = false
 end
@@ -386,8 +387,24 @@ EOF
         " if traefik_version && !init
     end
 
+    # Helm installation
+    config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+        which helm >/dev/null 2>&1 ||
+            ( echo \"Downloading and installing Helm #{helm_version}\"
+            curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+            mv linux-amd64/helm /usr/local/bin && \\
+            rm -rf linux-amd64 && \\
+            [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+    " unless init
+
     # Linstor / DRBBD installation
     if linstor_kube_version
+
+        config_all.vm.provision "LinstorDownload", :type => "shell", :name => "Downloading Linstor", :inline => "
+            [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
+            helm template linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor/ | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+            docker pull -q postgres:#{linstor_pg_version}
+        " unless init
 
         config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD kernel module", :inline => "
             export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
@@ -445,7 +462,7 @@ EOF
                 echo 'Installing ZFS ; this might take a while, be patient...'
                 apt-get install -y -t $(lsb_release -cs)-backports dkms spl-dkms
                 echo 'Installing ZFS ; this might take a while, be patient...'
-                apt-get install -y -t $(lsb_release -cs)-backports zfs-dkms zfsutils-linux
+                apt-get install -y -t $(lsb_release -cs)-backports zfs-dkms zfsutils-linux || /bin/true
                 modprobe zfs
             )
         "
@@ -849,7 +866,7 @@ spec:
         effect: NoSchedule
       containers:
       - name: postgres
-        image: postgres:12
+        image: postgres:#{linstor_pg_version}
         volumeMounts:
         - name: linstor-postgresql-volume
           mountPath: /var/lib/postgresql/data
