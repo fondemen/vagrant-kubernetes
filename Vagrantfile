@@ -83,14 +83,6 @@ if read_bool_env 'GLUSTER', false
 
     gluster_version = read_env 'GLUSTER_VERSION', '7'
     gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
-    # Directory root for additional vdisks for Gluster
-    if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
-      vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
-    else
-      vboxmanage_path = "VBoxManage" # Assume it's in the path
-    end
-    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
-
     heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
     heketi_admin_secret = read_env 'HEKETI_ADMIN', "My Secret"
@@ -109,10 +101,28 @@ if read_bool_env 'LINSTOR', true
     drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.23-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
     drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.13.1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_size = (read_env 'LINSTOR_DRBD_SIZE', 60).to_i
     linstor_pg_version = read_env 'LINSTOR_PG_VERSION', "12" # check https://hub.docker.com/_/postgres?tab=description
+    linstor_zfs = false # not implemented yet
 else
     linstor_kube_version = false
 end
+
+if gluster_version && linstor_kube_version
+  default_storage = (read_env 'DEFAULT_STORAGE', 'gluster').downcase
+elsif gluster_version
+  default_storage = 'gluster'
+elsif linstor_kube_version
+  default_storage = 'linstor'
+end
+
+# Directory root for additional vdisks for Gluster or Linstor
+if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
+  vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
+else
+  vboxmanage_path = "VBoxManage" # Assume it's in the path
+end
+vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
 traefik_version = read_env 'TRAEFIK', '2.2'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
@@ -402,7 +412,8 @@ EOF
 
         config_all.vm.provision "LinstorDownload", :type => "shell", :name => "Downloading Linstor", :inline => "
             [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
-            helm template linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor/ | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+            K8S_VERSION=$(apt-cache madison kubeadm | grep '1.18' | head -1 | awk '{print $3}' | cut -d- -f1)
+            helm template linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor/ -set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
             docker pull -q postgres:#{linstor_pg_version}
         " unless init
 
@@ -445,9 +456,13 @@ EOF
                 dpkg -i drbd-dkms_#{drbd_version}_all.deb
                 cd ..
                 rm -rf drbd
+
+                #apt-get purge -y docbook-xsl flex xsltproc po4a debhelper
+                #apt-get autoremove -y
+
+                modprobe drbd
             )
-            modprobe drbd
-            grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd > /etc/modules-load.d/modules.conf 
+            grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd >> /etc/modules-load.d/modules.conf 
         "
         config_all.vm.provision "ZFSInstall", :type => "shell", :name => "Installing ZFS kernel module", :inline => "
             lsmod | grep -qi zfs || (
@@ -464,8 +479,9 @@ EOF
                 echo 'Installing ZFS ; this might take a while, be patient...'
                 apt-get install -y -t $(lsb_release -cs)-backports zfs-dkms zfsutils-linux || /bin/true
                 modprobe zfs
+                grep -q zfs /etc/modules-load.d/modules.conf  || echo zfs >> /etc/modules-load.d/modules.conf 
             )
-        "
+        " if linstor_zfs
 
     end
         
@@ -754,9 +770,8 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
     name: glusterfs
-    namespace: default
-    annotations:
-      storageclass.kubernetes.io/is-default-class: \\"true\\"
+    #{if 'gluster' == default_storage then "annotations:
+      storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
 provisioner: kubernetes.io/glusterfs
 parameters:
     resturl: \\"http://#{root_ip}:8080\\"
@@ -828,6 +843,9 @@ roleRef:
             end # Helm
 
             if linstor_kube_version
+
+                linstor_cmd = "kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor"
+
                 if master
 
                     config.vm.provision "LinstorNS", :type => "shell", :name => "Setting-up namespace for Linstor", :inline => "
@@ -899,14 +917,14 @@ EOF
 
                     config.vm.provision "Linstor", :type => "shell", :name => "Setting-up Linstor", :inline => <<-EOF
                         [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz 
-                        helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo '
+                        helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo "
 controller:
   db:
     user: linstor
     password: #{linstor_password}
     connectionUrl: jdbc:postgresql://linstor-db/linstor
   nodeSelector:
-    node-role.kubernetes.io/master: ""
+    node-role.kubernetes.io/master: \\"\\"
   tolerations: 
   - effect: NoSchedule
     key: node-role.kubernetes.io/master
@@ -926,30 +944,32 @@ satellite:
     key: node.kubernetes.io/unschedulable
 
 stork:
-    replicaCount: #{if nodes >= 5 then 3 else 1 end}
-    tolerations:
-    - effect: NoSchedule
-      key: node-role.kubernetes.io/master 
-    - effect: NoSchedule
-      key: node.kubernetes.io/unschedulable
-    #{if nodes < 5 then "nodeSelector:
-      node-role.kubernetes.io/master: \"\"" else "" end}
+  replicaCount: 1
+  tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master 
+  - effect: NoSchedule
+    key: node.kubernetes.io/unschedulable
+  #{if nodes < 5 then "nodeSelector:
+    node-role.kubernetes.io/master: \\\"\\\"" else "" end}
 
 storkScheduler:
-    replicaCount: #{if nodes >= 5 then 3 else 1 end}
-    tolerations:
-    - effect: NoSchedule
-      key: node-role.kubernetes.io/master 
-    - effect: NoSchedule
-      key: node.kubernetes.io/unschedulable
-    #{if nodes < 5 then "nodeSelector:
-      node-role.kubernetes.io/master: \"\"" else "" end}
+  image:
+    tag: v$(apt-cache madison kubeadm | grep '1.18' | head -1 | awk '{print $3}' | cut -d- -f1)
+  replicaCount: 1
+  tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master 
+  - effect: NoSchedule
+    key: node.kubernetes.io/unschedulable
+  #{if nodes < 5 then "nodeSelector:
+    node-role.kubernetes.io/master: \\\"\\\"" else "" end}
 
     
 csi:
   controller:
     nodeSelector:
-      node-role.kubernetes.io/master: ""
+      node-role.kubernetes.io/master: \\"\\"
     tolerations:
     - effect: NoSchedule
       key: node-role.kubernetes.io/master 
@@ -958,16 +978,69 @@ csi:
     - effect: NoSchedule
       key: node-role.kubernetes.io/master 
     - effect: NoSchedule
-      key: node.kubernetes.io/unschedulable' | helm -n #{linstor_ns} upgrade --install linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor -f -
-                        grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor\"' >> /etc/bash.bashrc
-                        kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
-                        until kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node list >/dev/null 2>&1; do sleep 3; done
+      key: node.kubernetes.io/unschedulable" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor -f -
+                        grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"#{linstor_cmd}\"' >> /etc/bash.bashrc
+                        #{linstor_cmd} node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
+                        until #{linstor_cmd} node list >/dev/null 2>&1; do sleep 3; done
 EOF
                 end # master
 
                 config.vm.provision "LinstorAddNode", :type => "shell", :name => "Adding #{hostname} to Linstor", :inline => "
-                    ssh root@#{root_hostname} 'kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node list' | grep #{hostname} | grep -q #{ip} || ssh root@#{root_hostname} 'kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor node create #{hostname} #{ip}'
+                    ssh root@#{root_hostname} 'kubectl -n #{linstor_ns} get --no-headers pods -o wide | grep #{hostname} | grep linstor-satellite | grep -qi running' || (
+                      echo \"Waiting for linstor to be active on this node\"
+                      until ssh root@#{root_hostname} 'kubectl -n #{linstor_ns} get --no-headers pods -o wide | grep #{hostname} | grep linstor-satellite | grep -qi running'; do sleep 2; done
+                    )
+                    ssh root@#{root_hostname} '#{linstor_cmd} node list' | grep #{hostname} | grep -q #{ip} || (
+                      ssh root@#{root_hostname} '#{linstor_cmd} node create #{hostname} #{ip}'
+                      echo \"Waiting for node to be online\"
+                      until ssh root@#{root_hostname} '#{linstor_cmd} node list -n #{hostname}' | grep -qi online; do sleep 2; done
+                    )
                 "
+
+                drbd_disk = if gluster_version then "/dev/sdc" else "/dev/sdb" end
+                drbd_disk_nr = if gluster_version then 1 else 0 end
+                # Additional disk for DRBD storage
+                config.vm.provider :virtualbox do |vb|
+                    vb.name = hostname
+                    drbd_disk_file = File.join(vdisk_root, hostname, "drbd-#{hostname}.vdi")
+                    unless File.exist?(drbd_disk_file)
+                        vb.customize ['createhd', '--filename', drbd_disk_file, '--format', 'VDI', '--size', drbd_size * 1024]
+                    end
+                    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', drbd_disk_nr, '--type', 'hdd', '--medium', drbd_disk_file]
+                end
+                config.vm.provision "DRBDPartition", type: "shell", name: 'Creating a partition for Linstor / DRBD', inline: "
+                  pvs | grep -q #{drbd_disk} || pvcreate #{drbd_disk}
+                  vgs | grep -q 'linvg' || vgcreate linvg #{drbd_disk}
+                  lvs | grep -q 'linlv' || lvcreate -L #{drbd_size*1024-256}M --thinpool linlv linvg
+                  ssh root@#{root_hostname} '#{linstor_cmd} storage-pool list -n #{hostname} -s default | grep -q #{hostname} || #{linstor_cmd} storage-pool create lvmthin #{hostname} default linvg/linlv'
+                "
+
+                if master
+                  config.vm.provision "LinstorStorageClass", type: "shell", name: 'Creating the \'linstor\' and \'linstor-3\' Kubernetes StorageClass', inline: <<-EOF
+                    echo '---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "linstor"
+  #{if 'linstor' == default_storage then "annotations:
+    storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
+provisioner: linstor.csi.linbit.com
+parameters:
+  autoPlace: "2"
+  storagePool: "default"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: "linstor-3"
+  #{if 'linstor-3' == default_storage then "annotations:
+    storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
+provisioner: linstor.csi.linbit.com
+parameters:
+  autoPlace: "3"
+  storagePool: "default"' | kubectl apply -f -
+EOF
+                end
             end # linstor
 
             if k8s_version && helm_version && traefik_version
