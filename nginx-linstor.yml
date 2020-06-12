@@ -1,0 +1,77 @@
+# Once deployed with kubectl apply, one should be able to get an nginx 404 response with
+# curl http://192.168.2.100:30080 # to check service
+# curl -H 'Host: nginx.local' http://192.168.2.100:30080 # to check ingress
+# curl -H 'Host: nginx.local' http://192.168.2.100 # to check proxy
+# To add a document, login to one of the machine with vagrant ssh, go root with sudo su -
+# then find the volume name with gluster volume list
+# mkdir -p ./mnt ; mount -t glusterfs localhost:/<Volume name> ./mnt
+# then add an index.html
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc
+spec:
+  storageClassName: linstor
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1 
+kind: Deployment
+metadata:
+  labels:
+    run: nginx
+  name: nginx-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      run: nginx
+  template:
+    metadata:
+      labels:
+        run: nginx
+    spec:
+      volumes:
+      - name: www
+        persistentVolumeClaim:
+          claimName: test-pvc
+      containers:
+      - image: nginx
+        name: nginx
+        volumeMounts:
+        - name: www
+          mountPath: /usr/share/nginx/html
+        ports:
+          - name: http
+            containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    run: nginx
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: nginx-ingress
+spec:
+  rules:
+  - host: nginx.local
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: nginx-service
+          servicePort: 80

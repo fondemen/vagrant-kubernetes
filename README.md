@@ -14,7 +14,7 @@ Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#no
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
-[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
+[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs", or [Linstor](https://www.linbit.com/drbd-user-guide/linstor-guide-1_0-en/) / [DRBD](http://drbd.org) using storage class "linstor" (2 replicas) or "linstor-3" (3 replicas). A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi` for GlusterFS or `~/VirtualBox\ VMs/k8s0X/drbd-k8s0X.vdi` for Linstor.
 
 [Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.2.100:9000/.
 
@@ -22,9 +22,25 @@ Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A
 
 ## Testing
 
-Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
+### Testing GlusterFS
+
+GlusterFS can be mouted y multiple writers.
+
+Invoke `kubectl delete -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-linstor.yml` in case you tested previously with [Linstor](#testing-linstor).
+
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-gluster.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
 
 To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). You can find the exact volume name with `kubectl get pv $(kubectl get pvc test-gluster-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.glusterfs.path}'`. Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.2.100` should serve you that file.
+
+### Testing Linstor
+
+Linstor can be mounted by only one pod at a time.
+
+Invoke `kubectl delete -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-gluster.yml` in case you tested previously with [GlusterFS](#testing-glusterfs).
+
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-linstor.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with one backend](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
+
+To load a file, list linstor volumes with `linstor volume list` : one volume should show up (the one created by the persistent volume claim - you can find the exact volume name with `kubectl get pv $(kubectl get pvc test-gluster-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.csi.volumeHandle}'`). Note the `device_name` and the `node` of the `InUse`. Now, login to node with `sudo ssh [primary]` (that you can also find using `sudo drbdadm status [volume_name]`), create a directory (e.g. `mkdir nginx-data`), and mount the volume with `mount [device_name] nginx-data.`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.2.100` should serve you that file.
 
 ## Remote access
 
@@ -72,6 +88,9 @@ Default is tiller.
 
 ### Storage configuration
 
+#### DEFAULT_STORAGE
+The default Kubernetes storage class. Can be `gluster` or `linstor`. Prefers `gluster` if more than one storage class is available.
+
 #### GLUSTER
 Wether to install Gluster and Heketi.
 Default is true.
@@ -84,6 +103,10 @@ Default is 7.
 Size in GiB of the GlusterFS-dedicated additional partition. A new disk of this size is to be created for each VM.
 Default is 60.
 
+#### GLUSTER_REPLICAS
+The number of *additional* replicas to store.
+Default is 2 (so we have 3 copies).
+
 #### HEKETI_VERSION
 The version of Heketi to install (see https://github.com/heketi/heketi/releases).
 Default is 9.0.0.
@@ -93,6 +116,38 @@ Admin password for Heketi.
 
 #### HEKETI_PASSWORD
 User passsword for Heketi.
+
+#### LINSTOR
+Wether to install Linstor and DRBD.
+Default is true.
+
+#### LINSTOR_KUBE_VERSION
+The version of [kube_linstor](https://github.com/kvaps/kube-linstor) to use.
+Default is 1.7.1-2.
+
+#### LINSTOR_NS
+The Kuberetes namespace where Linstor is to run.
+Default is linstor.
+
+#### LINSTOR_PASSWORD
+The replication password for DRBD.
+You are encouraged to chage the default value.
+
+#### LINSTOR_PG_VERSION
+The version of [PostgreSQL](https://hub.docker.com/_/postgres?tab=description) to use. Note we merely use a single instance of Postgres here.
+Default is 12.
+
+#### LINSTOR_DRBD_DKMS_VERSION
+The version of [DRBD kernel](https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/) to use.
+Default is 9.0.23-1.
+
+#### LINSTOR_DRBD_UTILS_VERSION
+The version of [DRBD utils](https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/) to use.
+Default is 9.13.1.
+
+#### LINSTOR_DRBD_SIZE
+Size in GiB of the GlusterFS-dedicated additional partition. A new disk of this size is to be created for each VM.
+Default is 60.
 
 ### Ingress configuration
 
