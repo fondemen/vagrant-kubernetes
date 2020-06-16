@@ -130,6 +130,7 @@ traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 helm_version = read_env 'HELM_VERSION', '3.2.1' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
+raise "Linstor requires Helm to be installed" if linstor_version && !helm_version
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
 raise "Traefik requires Helm v3+" if traefik_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
