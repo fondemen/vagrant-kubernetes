@@ -383,22 +383,8 @@ EOF
                 fi
             " unless init
         end
-
-        config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-            which helm >/dev/null 2>&1 ||
-                ( echo \"Downloading and installing Helm #{helm_version}\"
-                curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
-                mv linux-amd64/helm /usr/local/bin && \\
-                rm -rf linux-amd64 && \\
-                [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
-        " if helm_version && !init
-
-        config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-            docker image pull -q traefik:#{traefik_version}
-        " if traefik_version && !init
     end
 
-    # Helm installation
     config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
         which helm >/dev/null 2>&1 ||
             ( echo \"Downloading and installing Helm #{helm_version}\"
@@ -406,7 +392,11 @@ EOF
             mv linux-amd64/helm /usr/local/bin && \\
             rm -rf linux-amd64 && \\
             [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
-    " unless init
+    " if helm_version && !init
+
+    config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
+        docker image pull -q traefik:#{traefik_version}
+    " if traefik_version && !init
 
     # Linstor / DRBBD installation
     if linstor_kube_version

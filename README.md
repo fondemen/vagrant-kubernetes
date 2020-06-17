@@ -10,7 +10,7 @@ vagrant ssh
 kubectl get pods
 ```
 
-Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kuberbetes Dashboard with admin rigths is available at http://192.168.2.100:8001/
+Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kubernetes Dashboard with admin rigths is available at http://192.168.2.100:8001/
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
@@ -96,7 +96,7 @@ Wether to install Gluster and Heketi.
 Default is true.
 
 #### GLUSTER_VERSION
-The version of GlusterFS to install. Setting this of [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.
+The version of GlusterFS to install. Setting this or [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.
 Default is 7.
 
 #### GLUSTER_SIZE
