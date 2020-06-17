@@ -130,7 +130,7 @@ traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 helm_version = read_env 'HELM_VERSION', '3.2.1' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
-raise "Linstor requires Helm to be installed" if linstor_version && !helm_version
+raise "Linstor requires Helm to be installed" if linstor_kube_version && !helm_version
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
 raise "Traefik requires Helm v3+" if traefik_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
@@ -403,7 +403,7 @@ EOF
 
         config_all.vm.provision "LinstorDownload", :type => "shell", :name => "Downloading Linstor", :inline => "
             [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
-            K8S_VERSION=$(apt-cache madison kubeadm | grep '1.18' | head -1 | awk '{print $3}' | cut -d- -f1)
+            K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}' | cut -d- -f1)
             helm template linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor/ -set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
             docker pull -q postgres:#{linstor_pg_version}
         " unless init
@@ -946,7 +946,7 @@ stork:
 
 storkScheduler:
   image:
-    tag: v$(apt-cache madison kubeadm | grep '1.18' | head -1 | awk '{print $3}' | cut -d- -f1)
+    tag: v$(kubectl version --short | awk -Fv '/Server Version: /{print $3}')
   replicaCount: 1
   tolerations:
   - effect: NoSchedule
