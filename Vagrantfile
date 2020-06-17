@@ -137,6 +137,8 @@ host_itf = read_env 'ITF', false
 leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
+expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
+
 guest_additions = read_bool_env 'GUEST_ADDITIONS', false
 
 public = read_bool_env 'PUBLIC', false
@@ -379,19 +381,6 @@ EOF
                 fi
             " unless init
         end
-
-        config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-            which helm >/dev/null 2>&1 ||
-                ( echo \"Downloading and installing Helm #{helm_version}\"
-                curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
-                mv linux-amd64/helm /usr/local/bin && \\
-                rm -rf linux-amd64 && \\
-                [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
-        " if helm_version && !init
-
-        config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-            docker image pull -q traefik:#{traefik_version}
-        " if traefik_version && !init
     end
 
     if storageos_version
@@ -408,6 +397,19 @@ EOF
             docker image pull quay.io/coreos/etcd:v#{storageos_etcd_version}
         " if !init && storageos_etcd_version
     end
+    
+    config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+        which helm >/dev/null 2>&1 ||
+            ( echo \"Downloading and installing Helm #{helm_version}\"
+            curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+            mv linux-amd64/helm /usr/local/bin && \\
+            rm -rf linux-amd64 && \\
+            [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+    " if helm_version && !init
+
+    config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
+        docker image pull -q traefik:#{traefik_version}
+    " if traefik_version && !init
         
     (1..nodes).each do |node_number|
         definition = definitions[node_number-1]
@@ -1038,6 +1040,8 @@ spec:
     - name: api@internal
       kind: TraefikService' | kubectl apply -f -
 EOF
+
+                    config.vm.network "forwarded_port", guest: traefik_db_port, host: traefik_db_port if expose_db_ports
                     
                     if k8s_db_port && k8s_db_port > 0
                         config.vm.provision "KubernetesDashboard", :type => "shell", :name => "Exposing Kubernetes Dashboard on http://#{root_ip}:#{k8s_db_port}/", :inline => <<-EOF
@@ -1076,6 +1080,8 @@ spec:
 " | kubectl apply -f -
                           )
 EOF
+
+                        config.vm.network "forwarded_port", guest: k8s_db_port, host: k8s_db_port if expose_db_ports
                     end # K8S Dashboard over traefik
                 end
             end # Traefik

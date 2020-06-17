@@ -10,7 +10,7 @@ vagrant ssh
 kubectl get pods
 ```
 
-Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kuberbetes Dashboard with admin rigths is available at http://192.168.2.100:8001/
+Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kubernetes Dashboard with admin rigths is available at http://192.168.2.100:8001/
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
@@ -37,6 +37,12 @@ Invoke `kubectl delete -f kubectl apply -f https://raw.githubusercontent.com/fon
 Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/storageos/nginx-test-file-storageos.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 404 (as no file exists to be served).
 
 You should be able to see your volume using StorageOS CLI: `storageos volume ls`. To load a file, run the following command: `k exec $(kubectl get pods -l run=nginx -o jsonpath='{.items[0].metadata.name}') -- /bin/sh -c 'echo "Hello World!" > /usr/share/nginx/html/index.html'`. Now `curl -H 'Host: nginx.local' 192.168.2.100` should return "Hello World!".
+
+## Remote access
+
+To use [kubectl](https://kubernetes.io/fr/docs/reference/kubectl/overview/) directly from the host machine, do `vagrant ssh -c 'cat ~/.kube/config' > kubeconfig; export KUBECONFIG="$PWD/kubeconfig"`. Note that the exported config supplies full admin rights to the cluster.
+
+Dashboards ([Kubernetes](#k8s_db_port) and [Traefik](#traefik_db_port)) can be exposed *unsecured* on the host machine by settig the EXPOSE_DB_PORTS env var to true *before* firing up the `vagrant up` or another `vagrant provision` in case the cluster already exists.
 
 ## Configuration
 
@@ -83,7 +89,7 @@ Wether to install Gluster and Heketi.
 Default is true.
 
 #### GLUSTER_VERSION
-The version of GlusterFS to install. Setting this of [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.
+The version of GlusterFS to install. Setting this or [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.
 Default is 7.
 
 #### GLUSTER_SIZE
