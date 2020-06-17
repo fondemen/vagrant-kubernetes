@@ -95,7 +95,7 @@ else
 end
 
 if read_bool_env 'LINSTOR', true
-    linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "1.7.1-2" # check https://github.com/kvaps/kube-linstor/releases
+    linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "master" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
     drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.23-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
@@ -402,9 +402,23 @@ EOF
     if linstor_kube_version
 
         config_all.vm.provision "LinstorDownload", :type => "shell", :name => "Downloading Linstor", :inline => "
-            [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
+            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+            export DEBIAN_FRONTEND=noninteractive
+            if [[ '#{linstor_kube_version}' =~ ^[0-9\\.-]+$ ]]; then
+              [ -d kube-linstor-#{linstor_kube_version} ] || ( curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz; mv kube-linstor-#{linstor_kube_version} kube-linstor )
+            elif [ -d kube-linstor ]; then
+              apt-get install -y git
+              cd kube-linstor
+              git reset --hard
+              git checkout #{linstor_kube_version}
+              git pull
+              cd ..
+            else
+              apt-get install -y git
+              git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
+            fi
             K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}' | cut -d- -f1)
-            helm template linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor/ -set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+            helm template linstor kube-linstor/helm/kube-linstor/ -set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
             docker pull -q postgres:#{linstor_pg_version}
         " unless init
 
@@ -907,7 +921,21 @@ spec:
 EOF
 
                     config.vm.provision "Linstor", :type => "shell", :name => "Setting-up Linstor", :inline => <<-EOF
-                        [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz 
+                        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                        export DEBIAN_FRONTEND=noninteractive
+                        if [[ '#{linstor_kube_version}' =~ ^[0-9\\.-]+$ ]]; then
+                          [ -d kube-linstor-#{linstor_kube_version} ] || ( curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz; mv kube-linstor-#{linstor_kube_version} kube-linstor )
+                        elif [ -d kube-linstor ]; then
+                          apt-get install -f git
+                          cd kube-linstor
+                          git reset --hard
+                          git checkout #{linstor_kube_version}
+                          git pull
+                          cd ..
+                        else
+                          apt-get install -f git
+                          git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
+                        fi
                         helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo "
 controller:
   db:
@@ -969,7 +997,7 @@ csi:
     - effect: NoSchedule
       key: node-role.kubernetes.io/master 
     - effect: NoSchedule
-      key: node.kubernetes.io/unschedulable" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor-#{linstor_kube_version}/helm/kube-linstor -f -
+      key: node.kubernetes.io/unschedulable" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor/helm/kube-linstor -f -
                         grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"#{linstor_cmd}\"' >> /etc/bash.bashrc
                         #{linstor_cmd} node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
                         until #{linstor_cmd} node list >/dev/null 2>&1; do sleep 3; done
