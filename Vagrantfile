@@ -106,7 +106,7 @@ end
 if read_bool_env 'PORTWORX', true
     raise "There should be at least 3 nodes in a Portworx cluster ; set PORTWORX env var to 0 to disable Portworx" unless nodes >= 3
 
-    portworx_user = read_env 'PORTWORX_USER', false
+    portworx_user = read_env 'PORTWORX_USER', ""
     
     portworx_version = read_env 'PORTWORX_VERSION', "latest"
     portworx_cluster_name = read_env 'PORTWORX_CLUSTER', "default"
@@ -873,17 +873,17 @@ roleRef:
 
                         kubectl -n kube-system get secret px-essential >/dev/null 2>&1 || (
                             if [ -z '#{portworx_user}' ]; then
-                                echo 'Define your Protworx user id using the PORTWORX_USER env var :
+                                echo 'Define your Portworx user id using the PORTWORX_USER env var :
 - go https://central.portworx.com/specGen and login/register
 - click install and run
 - create a new spec if none exist (parameters are not used in this script)
 - IF NOT USED ELSEWHERE unlink cluster - see https://docs.portworx.com/portworx-install-with-kubernetes/operate-and-maintain-on-kubernetes/troubleshooting/unlink-a-portworx-essentials-cluster/
 - view you spec (in the actions of your spec)
-- get the USERID in the first line of the shown k8s installation # SOURCE:https://install.portworx.com/?...&user=*USERID*&...' >&2
+- get the USERID in the first line of the shown k8s installation # SOURCE:https://install.portworx.com/?...&user=*USERID*&...
+- run "vagrant provision --provision-with PortworxInstall #{root_hostname}"' >&2
                                 exit -1
-                            fi
-
-                            echo "
+                            else
+                                echo "
 apiVersion: v1
 kind: Secret
 metadata:
@@ -892,6 +892,7 @@ metadata:
 data:
   px-essen-user-id: $(echo -n '#{portworx_user}' | base64)
   px-osb-endpoint: aHR0cHM6Ly9weGVzc2VudGlhbHMucG9ydHdvcnguY29tL29zYi9iaWxsaW5nL3YxL3JlZ2lzdGVy" | kubectl apply -f -
+                            fi
                         )
         
                         helm status portworx 2>/dev/null | grep -q deployed || echo '
