@@ -2,6 +2,7 @@
 Starting up a Kubernetes cluster with Vagrant and VirtualBox.
 
 ```
+export PORTWORX_USER=[Portworx User ID]
 vagrant box update # can fail safely
 vagrant up
 # Now you can login
@@ -14,13 +15,25 @@ Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#no
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
-[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
+[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Portworx](https://portworx.com/) Essentials as long as you supply you user ID using the PORTWORX_USER env var. To get your UserID, register a new spec on https://central.portworx.com/ (parameters are not used), and get the user parameter given by its "View Spec" action url. Main storage classes are "portworx-db-sc" (for ReadWriteOnce) and "portworx-shared-sc" for "ReadWriteMany". A [dasboard](http://192.168.2.100:8008) (with credentials admin:Password1) is available as long as the `pxcli` command. For your containers using Portworx volumes to be colocated with master copy of the volume, define the [`schedulerName: stork`](https://docs.portworx.com/portworx-install-with-kubernetes/storage-operations/hyperconvergence/) parameter.
+
+If setting the GLUSTER=On env var, PersistentVolumeClaims can also be managed by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using storage class "glusterfs". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly.
 
 [Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.2.100:9000/.
 
 Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A-Kubernetes) for the installation procedure...
 
 ## Testing
+
+### Testing Portworx
+
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/portworx/nginx-portworks.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
+
+To load a file, list portworx volumes with `pxctl volume list` : one volume should show up (the one created by the persistent volume claim - you can find the exact volume name with `kubectl get pv $(kubectl get pvc test-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.portworxVolume.volumeID}'`). To load a file, run the following command: `k exec $(kubectl get pods -l run=nginx -o jsonpath='{.items[0].metadata.name}') -- /bin/sh -c 'echo "Hello World!" > /usr/share/nginx/html/index.html'`. Now `curl -H 'Host: nginx.local' 192.168.2.100` should return "Hello World!".
+
+### Testing GlusterFS
+
+Env var GLUSTER should be set to "On" *before* vagrant up is issued.
 
 Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.2.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.2.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.2.100` should return a 403 (as no file exists to be served).
 
@@ -72,9 +85,34 @@ Default is tiller.
 
 ### Storage configuration
 
+#### PORTWORX
+Wether to install Portworx Essentials.
+Default is true.
+
+#### PORTWORX_USER
+The Portworx User ID. This parameter is mandatory if you [enable Portworx](#portworx). It can be found by:
+- going https://central.portworx.com/specGen and login/register
+- clicking install and run
+- creating a new spec if none exist (parameters are not used in this script)
+- IF NOT USED ELSEWHERE unlinking cluster - see https://docs.portworx.com/portworx-install-with-kubernetes/operate-and-maintain-on-kubernetes/troubleshooting/unlink-a-portworx-essentials-cluster/
+- viewing you spec (in the actions menu of your spec)
+- getting the USERID in the first line of the shown k8s installation # SOURCE:https://install.portworx.com/?...&user=*USERID*&...
+
+#### PORTWORX_VERSION
+The version of Portworx to install. Setting this to `latest` makes use of the latest version. Setting this or [PORTWORX](#portworx) to `0` or `false` disables kubernetes installation.
+Default is latest.
+
+#### PORTWORX_CLUSTER
+The name of the Portworx cluster to create.
+Default is default.
+
+#### PORTWORX_SIZE
+Size in GiB of the Portworx-dedicated additional partition. A new disk of this size is to be created for each VM.
+Default is 60.
+
 #### GLUSTER
 Wether to install Gluster and Heketi.
-Default is true.
+Default is false.
 
 #### GLUSTER_VERSION
 The version of GlusterFS to install. Setting this of [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.

@@ -78,18 +78,19 @@ calico_version = read_env 'CALICO_VERSION', 'latest' if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
-if read_bool_env 'GLUSTER', true
+    # Directory root for additional vdisks for storage
+    if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
+        vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
+      else
+        vboxmanage_path = "VBoxManage" # Assume it's in the path
+      end
+      vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
+
+if read_bool_env 'GLUSTER', false
     raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
 
     gluster_version = read_env 'GLUSTER_VERSION', '7'
     gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
-    # Directory root for additional vdisks for Gluster
-    if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
-      vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
-    else
-      vboxmanage_path = "VBoxManage" # Assume it's in the path
-    end
-    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
     heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
@@ -102,12 +103,42 @@ else
     heketi_version = false
 end
 
+if read_bool_env 'PORTWORX', true
+    raise "There should be at least 3 nodes in a Portworx cluster ; set PORTWORX env var to 0 to disable Portworx" unless nodes >= 3
+
+    portworx_user = read_env 'PORTWORX_USER', false
+    raise "Define your Protworx user id using the PORTWORX_USER env var :
+    - go https://central.portworx.com/specGen and login/register
+    - click install and run
+    - create a new spec if none exist (parameters are not used in this script)
+    - IF NOT USED ELSEWHERE unlink cluster - see https://docs.portworx.com/portworx-install-with-kubernetes/operate-and-maintain-on-kubernetes/troubleshooting/unlink-a-portworx-essentials-cluster/
+    - view you spec (in the actions of your spec)
+    - get the USERID in the first line of the shown k8s installation # SOURCE:https://install.portworx.com/?...&user=*USERID*&..." unless portworx_user
+    
+    portworx_version = read_env 'PORTWORX_VERSION', "latest"
+    portworx_cluster_name = read_env 'PORTWORX_CLUSTER', "default"
+    portworx_size = (read_env 'PORTWORX_SIZE', 60).to_i
+
+    portworx_etcd_version = read_bool_env 'PORTWORX_ETCD_VERSION', '3.4.7'
+else
+    portworx_version = false
+end
+
+if gluster_version && portworx
+  default_storage = (read_env 'DEFAULT_STORAGE', 'gluster').downcase
+elsif gluster_version
+  default_storage = 'gluster'
+elsif portworx_version
+  default_storage = 'portworx'
+end
+
 traefik_version = read_env 'TRAEFIK', '2.2'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
 helm_version = read_env 'HELM_VERSION', '3.2.1' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
+raise "Portworx requires Helm to be installed" if portworx_version && !helm_version
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
 raise "Traefik requires Helm v3+" if traefik_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
@@ -360,19 +391,37 @@ EOF
                 fi
             " unless init
         end
+    end
 
-        config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-            which helm >/dev/null 2>&1 ||
-                ( echo \"Downloading and installing Helm #{helm_version}\"
-                curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
-                mv linux-amd64/helm /usr/local/bin && \\
-                rm -rf linux-amd64 && \\
-                [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
-        " if helm_version && !init
+    config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+        which helm >/dev/null 2>&1 ||
+            ( echo \"Downloading and installing Helm #{helm_version}\"
+            curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+            mv linux-amd64/helm /usr/local/bin && \\
+            rm -rf linux-amd64 && \\
+            [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+    " if helm_version && !init
 
-        config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-            docker image pull -q traefik:#{traefik_version}
-        " if traefik_version && !init
+    config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
+        docker image pull -q traefik:#{traefik_version}
+    " if traefik_version && !init
+
+    if portworx_version
+        config_all.vm.provision "PortworxDownload", :type => "shell", :name => "Downloading Portworx", :inline => "
+            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install -y git dbus nfs-common rpcbind nfs-kernel-server
+            git clone https://github.com/portworx/helm.git portworx
+
+            [ -f /usr/local/bin/cfssl ] || curl -sLo /usr/local/bin/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
+            [ -f /usr/local/bin/cfssljson ] || curl -sLo /usr/local/bin/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64
+            chmod +x /usr/local/bin/{cfssl,cfssljson}
+
+            docker pull -q quay.io/coreos/etcd:v#{portworx_etcd_version}
+
+            helm template portworx portworx/charts/portworx --set etcdEndPoint=etcd:http://dummy#{if 'latest' != portworx_version then ",imageVersion=#{portworx_version}" else '' end} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+            docker pull -q portworx/px-essentials:#{if 'latest' != portworx_version then portworx_version else "$(helm template portworx portworx/charts/portworx --set etcdEndPoint=etcd:http://dummy | grep 'image:' | grep oci-monitor | cut -d: -f3)" end}
+        " unless init
     end
         
     (1..nodes).each do |node_number|
@@ -660,10 +709,8 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
     name: glusterfs
-    namespace: default
-    annotations:
-      storageclass.kubernetes.io/is-default-class: \\"true\\"
-provisioner: kubernetes.io/glusterfs
+    #{if 'gluster' == default_storage then "annotations:
+      storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
 parameters:
     resturl: \\"http://#{root_ip}:8080\\"
     clusterid: \\"$CLUSTER_ID\\"
@@ -733,7 +780,139 @@ roleRef:
                 end
             end # Helm
 
+            if portworx_version && helm_version
 
+                portworx_disk = if gluster_version then "/dev/sdc" else "/dev/sdb" end
+                portworx_disk_nr = if gluster_version then 1 else 0 end
+                # Additional disk for Portworx storage
+                config.vm.provider :virtualbox do |vb|
+                    vb.name = hostname
+                    portworx_disk_file = File.join(vdisk_root, hostname, "portworx-#{hostname}.vdi")
+                    unless File.exist?(portworx_disk_file)
+                        vb.customize ['createhd', '--filename', portworx_disk_file, '--format', 'VDI', '--size', portworx_size * 1024]
+                    end
+                    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', portworx_disk_nr, '--type', 'hdd', '--medium', portworx_disk_file]
+                end
+
+                if master
+                    portworx_etcd_client_port = 2398
+                    portworx_etcd_peer_port = 2399
+                    portworx_etcd_data_dir = '/var/lib/portworx-etcd'
+
+                    config.vm.provision "PortworxEtcdCerts", type: "shell", name: 'Generating certificates for etcd for Portworx', inline: <<-EOF
+                        [ -f /usr/local/bin/cfssl ] || curl -sLo /usr/local/bin/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
+                        [ -f /usr/local/bin/cfssljson ] || curl -sLo /usr/local/bin/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64
+                        chmod +x /usr/local/bin/{cfssl,cfssljson}
+                        if [ ! -d /etc/pwx/etcdcerts/ ]; then
+                            mkdir -p /etc/pwx/etcdcerts/
+                            cd /etc/pwx/etcdcerts/
+
+                            echo '{"CN":"CA","key":{"algo":"rsa","size":2048}}' | cfssl gencert -initca - | cfssljson -bare ca -
+                            echo '{"signing":{"default":{"expiry":"43800h","usages":["signing","key encipherment","server auth","client auth"]}}}' > ca-config.json
+                            export ADDRESS=#{root_ip}
+                            export NAME=server
+                            echo '{"CN":"'$NAME'","hosts":[""],"key":{"algo":"rsa","size":2048}}' | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem -hostname="$ADDRESS" - | cfssljson -bare $NAME
+                            export NAME=peer
+                            echo '{"CN":"'$NAME'","hosts":[""],"key":{"algo":"rsa","size":2048}}' | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem -hostname="$ADDRESS" - | cfssljson -bare $NAME
+                            export ADDRESS=
+                            export NAME=client
+                            echo '{"CN":"'$NAME'","hosts":[""],"key":{"algo":"rsa","size":2048}}' | cfssl gencert -config=ca-config.json -ca=ca.pem -ca-key=ca-key.pem -hostname="$ADDRESS" - | cfssljson -bare $NAME
+                            
+                            chmod 0600 /etc/pwx/etcdcerts/server-key.pem
+
+                            mv server.pem server.crt
+                            mv server-key.pem server.key
+
+                            mv peer.pem peer.crt
+                            mv peer-key.pem peer.key
+                        fi
+
+                        kubectl -n kube-system get secret px-etcd-certs  >/dev/null 2>&1 || kubectl -n kube-system create secret generic px-etcd-certs --from-file=/etc/pwx/etcdcerts/ca.pem --from-file=/etc/pwx/etcdcerts/client.pem --from-file=/etc/pwx/etcdcerts/client-key.pem
+                    EOF
+
+                    config.vm.provision "PortworxEtcdInstall", type: "shell", name: 'Installing etcd for Portworx', inline: <<-EOF
+                        mkdir -p #{portworx_etcd_data_dir}
+                        if [ "$(docker inspect portworx-etcd-0 -f '{{.Config.Image}}')" != "quay.io/coreos/etcd:v#{portworx_etcd_version}" ]; then
+                            docker stop portworx-etcd-0 2>/dev/null && docker rm portworx-etcd-0
+                            docker run -d \
+                                --restart always \
+                                -p #{portworx_etcd_client_port}:#{portworx_etcd_client_port} \
+                                -p #{portworx_etcd_peer_port}:#{portworx_etcd_peer_port} \
+                                --mount type=bind,source=#{portworx_etcd_data_dir},destination=/etcd-data \
+                                --mount type=bind,source=/etc/pwx/etcdcerts/,destination=/etc/pwx/etcdcerts/ \
+                                --name portworx-etcd-0 \
+                                quay.io/coreos/etcd:v#{portworx_etcd_version} \
+                                /usr/local/bin/etcd \
+                                --name portworx-etcd-0 \
+                                --data-dir /etcd-data \
+                                --listen-client-urls https://0.0.0.0:#{portworx_etcd_client_port} \
+                                --advertise-client-urls https://#{root_ip}:#{portworx_etcd_client_port} \
+                                --listen-peer-urls https://0.0.0.0:#{portworx_etcd_peer_port} \
+                                --initial-advertise-peer-urls https://#{ip}:#{portworx_etcd_peer_port} \
+                                --initial-cluster portworx-etcd-0=https://#{root_ip}:#{portworx_etcd_peer_port} \
+                                --initial-cluster-token portworx-etcd-tkn \
+                                --initial-cluster-state new \
+                                --client-cert-auth=true \
+                                --trusted-ca-file=/etc/pwx/etcdcerts/ca.pem \
+                                --cert-file=/etc/pwx/etcdcerts/server.crt \
+                                --key-file=/etc/pwx/etcdcerts/server.key \
+                                --peer-client-cert-auth=true \
+                                --peer-trusted-ca-file=/etc/pwx/etcdcerts/ca.pem \
+                                --peer-cert-file=/etc/pwx/etcdcerts/peer.crt \
+                                --peer-key-file=/etc/pwx/etcdcerts/peer.key \
+                                --quota-backend-bytes 8589934592 \
+                                --auto-compaction-retention 100 \
+                                --auto-compaction-mode revision \
+                                --log-level info \
+                                --logger zap \
+                                --log-outputs stderr
+                        fi
+                    EOF
+
+                    config.vm.provision "PortworxInstall", :type => "shell", :name => "Setting-up Portworx", :inline => <<-EOF
+                        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                        export DEBIAN_FRONTEND=noninteractive
+                        [ -d portworx ] || (
+                            which git >/dev/null 2>&1 || apt-get install -y git
+                            git clone https://github.com/portworx/helm.git portworx
+                        )
+                        cd portworx
+
+                        kubectl -n kube-system get secret px-essential >/dev/null 2>&1 || echo "
+apiVersion: v1
+kind: Secret
+metadata:
+  name: px-essential
+  namespace: kube-system
+data:
+  px-essen-user-id: $(echo -n '#{portworx_user}' | base64)
+  px-osb-endpoint: aHR0cHM6Ly9weGVzc2VudGlhbHMucG9ydHdvcnguY29tL29zYi9iaWxsaW5nL3YxL3JlZ2lzdGVy" | kubectl apply -f -
+        
+                        helm status portworx 2>/dev/null | grep -q deployed || echo '
+#{if 'latest' != portworx_version then "imageVersion: #{portworx_version}" else "" end}
+clusterName: "#{portworx_cluster_name}"
+etcdEndPoint: "etcd:https://#{root_ip}:#{portworx_etcd_client_port}"
+drives: "#{portworx_disk}"
+etcd:
+  certPath: "/etc/pwx/etcdcerts/"
+  ca: "/etc/pwx/etcdcerts/ca.pem"
+  cert: "/etc/pwx/etcdcerts/client.pem"
+  key: "/etc/pwx/etcdcerts/client-key.key"
+deployOnMaster: true
+misc: "--oem esse"
+dataInterface: #{internal_itf}
+managementInterface: #{internal_itf}
+tolerations:
+- key: node-role.kubernetes.io/master
+  operator: Equal
+  effect: NoExecute
+- key: node-role.kubernetes.io/master
+  operator: Equal
+  effect: NoSchedule' | helm upgrade --install portworx ./charts/portworx/ -f -
+                        grep -q 'alias pxctl=' /etc/bash.bashrc >/dev/null 2>&1 || echo "alias pxctl='kubectl exec \\$(kubectl get pods -l name=portworx -n kube-system -o jsonpath=\\"{.items[0].metadata.name}\\")  -n kube-system -- /opt/pwx/bin/pxctl'" >> /etc/bash.bashrc
+EOF
+                end
+            end # Portworx
 
             if k8s_version && helm_version && traefik_version
                 if master
@@ -766,6 +945,10 @@ ports:
     expose: false
     port: #{k8s_db_port}
     hostPort: #{k8s_db_port}" end}
+  #{if portworx_version then "pxlighthouse:
+    expose: false
+    port: 8008
+    hostPort: 8008" end}
   websecure:
     expose: false
 
@@ -852,6 +1035,26 @@ spec:
           port: 80
 " | kubectl apply -f -
                           )
+EOF
+                        config.vm.provision "PortworxDashboard", :type => "shell", :name => "Exposing Portworx Lighthouse on http://#{root_ip}:8008/ (admin:Password1)", :inline => <<-EOF
+                            kubectl get ns portworx >/dev/null 2>&1 || kubectl create ns portworx
+                            kubectl -n portworx get ingressroutes dashboard >/dev/null 2>&1 || echo '---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dashboard
+  namespace: portworx
+spec:
+  entryPoints:
+  - pxlighthouse
+  routes:
+  - match: HostRegexp(`{host:.+}`)
+    kind: Rule
+    services:
+    - name: px-lighthouse
+      namespace: kube-system
+      kind: Service
+      port: 80' | kubectl apply -f -
 EOF
 
                         config.vm.network "forwarded_port", guest: k8s_db_port, host: k8s_db_port if expose_db_ports
