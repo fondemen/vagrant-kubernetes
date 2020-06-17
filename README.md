@@ -90,7 +90,7 @@ Wether to install Portworx Essentials.
 Default is true.
 
 #### PORTWORX_USER
-The Portworx User ID. This parameter is mandatory if you [enable Portworx](#portworx). It can be found by:
+The Portworx User ID. This parameter is mandatory at cluster creation if you [enable Portworx](#portworx). It can be found by:
 - going https://central.portworx.com/specGen and login/register
 - clicking install and run
 - creating a new spec if none exist (parameters are not used in this script)
