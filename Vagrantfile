@@ -418,7 +418,7 @@ EOF
               git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
             fi
             K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}' | cut -d- -f1)
-            helm template linstor kube-linstor/helm/kube-linstor/ -set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+            helm template linstor kube-linstor/helm/kube-linstor/ --set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
             docker pull -q postgres:#{linstor_pg_version}
         " unless init
 
