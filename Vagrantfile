@@ -849,7 +849,7 @@ roleRef:
 
             if linstor_kube_version
 
-                linstor_cmd = "kubectl exec -n #{linstor_ns} linstor-linstor-controller-0 -c linstor-controller -- linstor"
+                linstor_cmd = "kubectl exec -n #{linstor_ns} #{linstor_ns}-linstor-controller-0 -c linstor-controller -- linstor"
 
                 if master
 
@@ -999,6 +999,7 @@ csi:
     - effect: NoSchedule
       key: node.kubernetes.io/unschedulable" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor/helm/kube-linstor -f -
                         grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"#{linstor_cmd}\"' >> /etc/bash.bashrc
+                        grep -q 'alias storkctl=' /etc/bash.bashrc || echo 'alias storkctl=\"kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=#{linstor_ns}-linstor-stork -o jsonpath=\\"{.items[0].metadata.name}\\") -c stork -- /storkctl\"' >> /etc/bash.bashrc
                         #{linstor_cmd} node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
                         until #{linstor_cmd} node list >/dev/null 2>&1; do sleep 3; done
 EOF
