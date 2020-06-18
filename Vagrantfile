@@ -405,8 +405,10 @@ EOF
             export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
             export DEBIAN_FRONTEND=noninteractive
             if [[ '#{linstor_kube_version}' =~ ^[0-9\\.-]+$ ]]; then
-              [ -d kube-linstor-#{linstor_kube_version} ] || ( curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz; mv kube-linstor-#{linstor_kube_version} kube-linstor )
-            elif [ -d kube-linstor ]; then
+              [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
+              [ -d kube-linstor ] && rm -rf kube-linstor
+              [ -L kube-linstor ] || ln -s kube-linstor-#{linstor_kube_version} kube-linstor
+            elif [ -d kube-linstor/.git ]; then
               apt-get install -y git
               cd kube-linstor
               git reset --hard
@@ -924,16 +926,11 @@ EOF
                         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                         export DEBIAN_FRONTEND=noninteractive
                         if [[ '#{linstor_kube_version}' =~ ^[0-9\\.-]+$ ]]; then
-                          [ -d kube-linstor-#{linstor_kube_version} ] || ( curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz; mv kube-linstor-#{linstor_kube_version} kube-linstor )
-                        elif [ -d kube-linstor ]; then
-                          apt-get install -f git
-                          cd kube-linstor
-                          git reset --hard
-                          git checkout #{linstor_kube_version}
-                          git pull
-                          cd ..
-                        else
-                          apt-get install -f git
+                          [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
+                          [ -d kube-linstor ] && rm -rf kube-linstor
+                          [ -L kube-linstor ] || ln -s kube-linstor-#{linstor_kube_version} kube-linstor
+                        elif [ ! -d kube-linstor/.git ]; then
+                          which git >/dev/null 2>&1 || apt-get install -y git
                           git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
                         fi
                         helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo "
@@ -1029,15 +1026,15 @@ EOF
                     vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', drbd_disk_nr, '--type', 'hdd', '--medium', drbd_disk_file]
                 end
                 config.vm.provision "DRBDPartition", type: "shell", name: 'Creating a partition for Linstor / DRBD', inline: "
-                  pvs | grep -q #{drbd_disk} || pvcreate #{drbd_disk}
-                  vgs | grep -q 'linvg' || vgcreate linvg #{drbd_disk}
-                  lvs | grep -q 'linlv' || lvcreate -L #{drbd_size*1024-256}M --thinpool linlv linvg
+                  pvs 2>/dev/null | grep -q #{drbd_disk} || pvcreate #{drbd_disk}
+                  vgs 2>/dev/null | grep -q 'linvg' || vgcreate linvg #{drbd_disk}
+                  lvs 2>/dev/null | grep -q 'linlv' || lvcreate -L #{drbd_size*1024-256}M --thinpool linlv linvg
                   ssh root@#{root_hostname} '#{linstor_cmd} storage-pool list -n #{hostname} -s default | grep -q #{hostname} || #{linstor_cmd} storage-pool create lvmthin #{hostname} default linvg/linlv'
                 "
 
                 if master
                   config.vm.provision "LinstorStorageClass", type: "shell", name: 'Creating the \'linstor\' and \'linstor-3\' Kubernetes StorageClass', inline: <<-EOF
-                    echo '---
+                    kubectl get storageclasses.storage.k8s.io linstor >/dev/null 2>&1 || echo '---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
