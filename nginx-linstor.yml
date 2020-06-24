@@ -31,7 +31,7 @@ spec:
       labels:
         run: nginx
     spec:
-      schedulerName: stork
+      schedulerName: stork # so that pods are co-located with a volume replica
       volumes:
       - name: www
         persistentVolumeClaim:

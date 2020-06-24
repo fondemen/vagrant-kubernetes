@@ -424,6 +424,11 @@ EOF
             docker pull -q postgres:#{linstor_pg_version}
         " unless init
 
+        # TODO: check https://packages.linbit.com/proxmox/dists/proxmox-6/drbd-9.0/binary-amd64/ for simpler install
+        #wget -O- https://packages.linbit.com/package-signing-pubkey.asc | apt-key add -
+        #PVERS=6 && echo "deb http://packages.linbit.com/proxmox/ proxmox-$PVERS drbd-9.0" > /etc/apt/sources.list.d/linbit.list
+        #apt-get update
+        #apt-get install drbd-dkms drbdtop
         config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD kernel module", :inline => "
             export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
             export DEBIAN_FRONTEND=noninteractive
@@ -948,7 +953,7 @@ controller:
 ssl:
   enabled: false
 stunnel:
-  enabled: true
+  enabled: false
     
 satellite:
   ssl:
@@ -1049,9 +1054,17 @@ parameters:
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
+  name: "linstor-semiasync"
+provisioner: linstor.csi.linbit.com
+parameters:
+  autoPlace: "2"
+  storagePool: "default"
+  DrbdOptions/Net/protocol: "B"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
   name: "linstor-3"
-  #{if 'linstor-3' == default_storage then "annotations:
-    storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
 provisioner: linstor.csi.linbit.com
 parameters:
   autoPlace: "3"
