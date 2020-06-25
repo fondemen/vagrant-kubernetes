@@ -122,7 +122,7 @@ if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
 else
   vboxmanage_path = "VBoxManage" # Assume it's in the path
 end
-vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
+vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub('^[^:]+:', '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
 traefik_version = read_env 'TRAEFIK', '2.2'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
