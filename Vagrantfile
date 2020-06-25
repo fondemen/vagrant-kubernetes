@@ -46,7 +46,7 @@ master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for m
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
-docker_version = read_env 'DOCKER_VERSION', '19.03.8' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
+docker_version = read_env 'DOCKER_VERSION', '19.03.11' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 k8s_version = read_env 'K8S_VERSION', '1.18'
@@ -89,7 +89,7 @@ if read_bool_env 'GLUSTER', true
     else
       vboxmanage_path = "VBoxManage" # Assume it's in the path
     end
-    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.split(':')[1].strip rescue read_env("HOME") + "/VirtualBox VMs/" end
+    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub('^[^:]+:', '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
     heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
@@ -126,7 +126,7 @@ end
 traefik_version = read_env 'TRAEFIK', '2.2'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', '3.2.1' # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', '3.2.4' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
