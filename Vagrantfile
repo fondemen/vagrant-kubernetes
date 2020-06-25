@@ -39,9 +39,9 @@ if not plugins_to_install.empty?
   end
 end
 
-memory = read_env 'MEM', '2048'
-master_memory = read_env 'MASTER_MEM', '2048'
-cpus = read_env 'CPU', '1'
+memory = read_env 'MEM', '3072'
+master_memory = read_env 'MASTER_MEM', '3072'
+cpus = read_env 'CPU', '2'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
@@ -825,7 +825,7 @@ roleRef:
 
                     config.vm.provision "PortworxEtcdInstall", type: "shell", name: 'Installing etcd for Portworx', inline: <<-EOF
                         mkdir -p #{portworx_etcd_data_dir}
-                        if [ "$(docker inspect portworx-etcd-0 -f '{{.Config.Image}}')" != "quay.io/coreos/etcd:v#{portworx_etcd_version}" ]; then
+                        if [ "$(docker inspect portworx-etcd-0 -f '{{.Config.Image}}') 2>/dev/null" != "quay.io/coreos/etcd:v#{portworx_etcd_version}" ]; then
                             docker stop portworx-etcd-0 2>/dev/null && docker rm portworx-etcd-0
                             docker run -d \
                                 --restart always \
