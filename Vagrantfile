@@ -89,7 +89,7 @@ if read_bool_env 'GLUSTER', true
     else
       vboxmanage_path = "VBoxManage" # Assume it's in the path
     end
-    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub('^[^:]+:', '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
+    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub(/^[^:]+:/, '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
     heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
