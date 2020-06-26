@@ -58,9 +58,9 @@ k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db
 box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.18')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
-vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
-vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
-vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
+vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
+vagrant_group = read_env 'VAGRANT_GUEST_GROUP', 'vagrant'
+vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
 cni = (read_env 'CNI', 'calico').downcase
