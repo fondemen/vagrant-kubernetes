@@ -58,9 +58,9 @@ k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db
 box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.18')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
-vagrant_user = read_env 'VAGRANT_USER', 'vagrant'
-vagrant_group = read_env 'VAGRANT_GROUP', 'vagrant'
-vagrant_home = read_env 'VAGRANT_HOME', '/home/vagrant'
+vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
+vagrant_group = read_env 'VAGRANT_GUEST_GROUP', 'vagrant'
+vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
 cni = (read_env 'CNI', 'calico').downcase
@@ -122,7 +122,7 @@ if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
 else
   vboxmanage_path = "VBoxManage" # Assume it's in the path
 end
-vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub('^[^:]+:', '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
+vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub(/^[^:]+:/, '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
 traefik_version = read_env 'TRAEFIK', '2.2'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
