@@ -98,7 +98,7 @@ if read_bool_env 'LINSTOR', true
     linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "master" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
-    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.23-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.24-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
     drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.13.1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_size = (read_env 'LINSTOR_DRBD_SIZE', 60).to_i
@@ -423,6 +423,7 @@ EOF
             K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}' | cut -d- -f1)
             helm template linstor kube-linstor/helm/kube-linstor/ --set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
             docker pull -q postgres:#{linstor_pg_version}
+            apt-get install -y linux-headers-amd64
         " unless init
 
         # TODO: check https://packages.linbit.com/proxmox/dists/proxmox-6/drbd-9.0/binary-amd64/ for simpler install
@@ -462,7 +463,7 @@ EOF
                     # check https://dev.tranquil.it/wiki/Xenserver_-_Cr%C3%A9er_des_paquets_Debian_drbd9
                     make
                     make clean
-                    apt-get install -y debhelper
+                    apt-get install -y debhelper linux-headers-amd64
                     dpkg-buildpackage -rfakeroot -b -uc
                     cd ..
                 )
@@ -940,6 +941,9 @@ EOF
                           which git >/dev/null 2>&1 || apt-get install -y git
                           git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
                         fi
+                        K8S_SCHEDULER_IMAGE=$(kubectl -n kube-system get pods --no-headers -o custom-columns=":..image" | grep kube-scheduler | head -1 | cut -d, -f1)
+                        K8S_SCHEDULER_IMAGE_TAG=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f2)
+                        K8S_SCHEDULER_IMAGE=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f1)
                         helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo "
 controller:
   db:
@@ -978,7 +982,8 @@ stork:
 
 storkScheduler:
   image:
-    tag: v$(kubectl version --short | awk -Fv '/Server Version: /{print $3}')
+    repository: $K8S_SCHEDULER_IMAGE
+    tag: $K8S_SCHEDULER_IMAGE_TAG
   replicaCount: 1
   tolerations:
   - effect: NoSchedule
