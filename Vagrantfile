@@ -126,7 +126,7 @@ end
 traefik_version = read_env 'TRAEFIK', '2.2'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', '3.2.4' # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', '3.3.0' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
@@ -398,13 +398,14 @@ EOF
         " if !init && storageos_etcd_version
     end
     
-    config_all.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-        which helm >/dev/null 2>&1 ||
-            ( echo \"Downloading and installing Helm #{helm_version}\"
+    config_all.vm.provision "HelmDownload", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+        which helm >/dev/null 2>&1 || (
+            echo \"Downloading and installing Helm #{helm_version}\" && \\
             curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
             mv linux-amd64/helm /usr/local/bin && \\
             rm -rf linux-amd64 && \\
-            [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+            ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+        )
     " if helm_version && !init
 
     config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
@@ -907,12 +908,13 @@ EOF
             if k8s_version && helm_version
                 if master
                     config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-                        which helm >/dev/null 2>&1 ||
-                            ( echo \"Downloading and installing Helm #{helm_version}\"
+                        which helm >/dev/null 2>&1 || (
+                            echo \"Downloading and installing Helm #{helm_version}\" && \\
                             curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
                             mv linux-amd64/helm /usr/local/bin && \\
                             rm -rf linux-amd64 && \\
-                            [ -f /etc/bash_completion.d/helm ] || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+                            ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+                        )
                     "
                     if Gem::Version.new(helm_version) < Gem::Version.new('3')
                         config.vm.provision "TillerInstall", :type => "shell", :name => "Installing Tiller", :inline => <<-EOF
