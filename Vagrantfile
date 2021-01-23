@@ -46,6 +46,8 @@ master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for m
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
+own_image = read_bool_env 'K8S_IMAGE'
+
 docker_version = read_env 'DOCKER_VERSION', '19.03.11' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 containerd_version = read_env 'CONTAINERD_VERSION', '1.2.13'
@@ -53,9 +55,9 @@ containerd_version = read_env 'CONTAINERD_VERSION', '1.2.13'
 compose = read_env 'COMPOSE_VERSION', false
 raise "Docker Compose requires Docker to be installed first" unless docker_version
 
-k8s_version = read_env 'K8S_VERSION', '1.19'
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.19.7' else '1.19' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
-k8s_db_version = read_env 'K8S_DB_VERSION', 'latest'
+k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.1.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
@@ -78,7 +80,7 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end if k8s_version
-calico_version = read_env 'CALICO_VERSION', 'latest' if calico
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.17' else 'latest' end) if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
@@ -106,7 +108,7 @@ else
     heketi_version = false
 end
 
-traefik_version = read_env 'TRAEFIK', (if k8s_version then 'latest' else false end)
+traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.0' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
 helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.0' else false end) # check https://github.com/helm/helm/releases
@@ -767,8 +769,8 @@ metadata:
 spec:
   controller: traefik.io/ingress-controller' | kubectl apply -f - )
                         helm -n traefik status traefik 2>/dev/null | grep -q deployed || echo '
-#{if 'latest' == traefik_version then '' else 'image:
-  tag: "#{traefik_version}"' end}
+#{if 'latest' == traefik_version then '' else "image:
+  tag: \"#{traefik_version}\"" end}
 
 globalArguments:
 - "--global.checknewversion"

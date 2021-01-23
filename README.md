@@ -36,6 +36,10 @@ Dashboards ([Kubernetes](#k8s_db_port) and [Traefik](#traefik_db_port)) can be e
 
 Configuration is performed using environment variables:
 
+#### K8S_IMAGE
+Changes default values for some of the following environment variables (such as [K8S_VERSION](#k8s_version)) so that they match latest [available dedicated image](https://app.vagrantup.com/fondement/boxes/k8s). State `true` or `1` to enable.
+Default is false.
+
 ### Cluster configuration
 
 #### DOCKER_VERSION
