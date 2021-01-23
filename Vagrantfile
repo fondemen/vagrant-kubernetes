@@ -470,7 +470,7 @@ EOF
                 config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
                     grep -q 1 /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && sysctl -p /etc/sysctl.conf
                     if [ ! -f /etc/default/kubelet ]; then
-                        echo \'KUBELET_EXTRA_ARGS=\"--node-ip=#{ip}\" --cni-bin-dir=/opt/cni/bin,/usr/libexec/cni' > /etc/default/kubelet;
+                        echo \'KUBELET_EXTRA_ARGS=\"--node-ip=#{ip} --cni-bin-dir=/opt/cni/bin,/usr/libexec/cni\"' > /etc/default/kubelet;
                         systemctl daemon-reload
                         systemctl restart kubelet
                     fi
