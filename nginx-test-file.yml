@@ -1,11 +1,3 @@
-# Once deployed with kubectl apply, one should be able to get an nginx 404 response with
-# curl http://192.168.2.100:30080 # to check service
-# curl -H 'Host: nginx.local' http://192.168.2.100:30080 # to check ingress
-# curl -H 'Host: nginx.local' http://192.168.2.100 # to check proxy
-# To add a document, login to one of the machine with vagrant ssh, go root with sudo su -
-# then find the volume name with gluster volume list
-# mkdir -p ./mnt ; mount -t glusterfs localhost:/<Volume name> ./mnt
-# then add an index.html
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -62,7 +54,7 @@ spec:
       port: 80
       targetPort: 80
 ---
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: nginx-ingress
@@ -72,6 +64,9 @@ spec:
     http:
       paths:
       - path: /
+        pathType: Prefix
         backend:
-          serviceName: nginx-service
-          servicePort: 80
+          service:
+            name: nginx-service
+            port:
+              number: 80

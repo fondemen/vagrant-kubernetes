@@ -39,12 +39,16 @@ Configuration is performed using environment variables:
 ### Cluster configuration
 
 #### DOCKER_VERSION
-The version of Docker to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables Docker installation.
-Default is 19.03.8.
+The version of Docker to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [container runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables Docker and Contained installation.
+Default is 19.03.11.
+
+#### CONTAINERD_VERSION
+The version of Containerd to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [container runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)).
+Default is 1.2.13.
 
 #### K8S_VERSION
 The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables kubernetes installation.
-Default is 1.18.2.
+Default is 1.19.
 
 #### K8S_DB_PORT
 The port at which exposing the Kubernetes Dashboard. Traefik must be [enabled](#traefik) for the dashboard to be visible. Set to 0 to disable.
@@ -59,12 +63,12 @@ The CNI provider to use. Currently supported options are flannel and calico.
 Default is calico.
 
 #### CALICO_VERSION
-The version of calico to use.
-Default is 3.13.
+The version of calico to use. Set to latest to get the latest version.
+Default is latest.
 
 #### HELM_VERSION
 The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Note that you can [control](#tiller_ns) the kubernetes namespace used by tiller.
-Default is 3.2.0.
+Default is 3.5.0.
 
 #### TILLER_NS
 The namespace in which tiller is to be installed by helm. This parameter is ignored in case [HELM_VERSION](#helm_version) is &ge; 3.
@@ -97,8 +101,8 @@ User passsword for Heketi.
 ### Ingress configuration
 
 #### TRAEFIK
-The version of Traefik to install. Check tags on [Docker Hub](https://hub.docker.com/_/traefik).
-Default is 2.2.
+The version of Traefik to install. Check tags on [Docker Hub](https://hub.docker.com/_/traefik). Set to latest to get the latest version.
+Default is latest.
 
 #### TRAEFIK_DB_PORT
 The port at which exposing the Traefik dashoard. Set to 0 to disable.

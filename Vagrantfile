@@ -48,14 +48,15 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 docker_version = read_env 'DOCKER_VERSION', '19.03.11' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
+containerd_version = read_env 'CONTAINERD_VERSION', '1.2.13'
 
-k8s_version = read_env 'K8S_VERSION', '1.18'
+k8s_version = read_env 'K8S_VERSION', '1.19'
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
 k8s_db_version = read_env 'K8S_DB_VERSION', 'latest'
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
-box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.18')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
+box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.19')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
@@ -102,10 +103,10 @@ else
     heketi_version = false
 end
 
-traefik_version = read_env 'TRAEFIK', '2.2'
+traefik_version = read_env 'TRAEFIK', 'latest'
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', '3.3.0' # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', '3.5.0' # check https://github.com/helm/helm/releases
 tiller_namespace = read_env 'TILLER_NS', 'tiller'
 
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
@@ -258,8 +259,9 @@ Vagrant.configure("2") do |config_all|
                 add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
                 apt-get update
                 DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
+                CONTAINERD_VERSION=$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')
                 echo \"Installing Docker $DOCKER_VERSION\"
-                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io
+                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
                 apt-mark hold docker-ce docker-ce-cli containerd.io
             fi
             if [ ! -f /etc/docker/daemon.json ]; then
@@ -740,16 +742,26 @@ roleRef:
             if k8s_version && helm_version && traefik_version
                 if master
                     config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
-                        helm repo list | grep -q traefik || ( helm repo add traefik https://containous.github.io/traefik-helm-chart && helm repo update )
+                        helm repo list | grep -q traefik || ( helm repo add traefik https://helm.traefik.io/traefik && helm repo update )
                         kubectl get namespaces traefik > /dev/null 2>&1 || kubectl create namespace traefik
+                        kubectl get ingressclasses.networking.k8s.io > /dev/null 2>&1 && ( kubectl get ingressclasses.networking.k8s.io traefik-lb >/dev/null 2>&1 || echo '
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata: 
+  name: traefik
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: traefik.io/ingress-controller' | kubectl apply -f - )
                         helm -n traefik status traefik 2>/dev/null | grep -q deployed || echo '
-image:
-  tag: #{traefik_version}
+#{if 'latest' == traefik_version then '' else 'image:
+  tag: "#{traefik_version}"' end}
 
 globalArguments:
 - "--global.checknewversion"
 additionalArguments:
 - "--providers.kubernetesingress"
+- "--providers.kubernetesingress.ingressclass=traefik"
 
 service:
   enabled: false
