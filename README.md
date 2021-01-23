@@ -46,6 +46,10 @@ Default is 19.03.11.
 The version of Containerd to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [container runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)).
 Default is 1.2.13.
 
+#### COMPOSE_VERSION
+The version of Docker Compose to install. This is completely optional for a pure Kubernetes usage. Setting this to `0` or `false` disables Docker Compose installation.
+Default is 0.
+
 #### K8S_VERSION
 The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables kubernetes installation.
 Default is 1.19.
