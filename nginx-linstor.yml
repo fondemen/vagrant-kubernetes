@@ -6,7 +6,7 @@ metadata:
 spec:
   storageClassName: linstor
   accessModes:
-    - ReadOnlyMany
+    - ReadWriteOnce
   resources:
     requests:
       storage: 5Gi
