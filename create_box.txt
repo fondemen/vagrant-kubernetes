@@ -12,6 +12,7 @@ vagrant box remove k8sl
 vagrant box add k8sl k8sl.box
 
 #### Testing ####
+vagrant destroy -f default
 unset UPGRADE
 unset GUEST_ADDITIONS
 unset INIT
