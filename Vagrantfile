@@ -48,20 +48,20 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-docker_version = read_env 'DOCKER_VERSION', '19.03.11' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
+docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
-containerd_version = read_env 'CONTAINERD_VERSION', '1.2.13'
+containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else '1.4' end)
 
 compose = read_env 'COMPOSE_VERSION', false
 raise "Docker Compose requires Docker to be installed first" unless docker_version
 
-k8s_version = read_env 'K8S_VERSION', (if own_image then '1.19.7' else '1.19' end)
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
-k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.1.0' else 'latest' end)
+k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
-box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.19')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
+box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
@@ -80,7 +80,7 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end if k8s_version
-calico_version = read_env 'CALICO_VERSION', (if own_image then '3.17' else 'latest' end) if calico
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18.1' else 'latest' end) if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
@@ -108,18 +108,17 @@ else
     heketi_version = false
 end
 
-traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.0' else 'latest' end) else false end)
+traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.0' else false end) # check https://github.com/helm/helm/releases
-tiller_namespace = read_env 'TILLER_NS', 'tiller'
+helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.3' else false end) # check https://github.com/helm/helm/releases
+raise "Helm is supported as from version 3" if Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
-raise "Traefik requires Helm v3+" if traefik_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.11.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
@@ -193,6 +192,8 @@ WeA3gQboC1afHP2UE+JWVA/lrQK9FRYA1mVU6dH6a75OTTRN8AAACBAM5T5S3P6mZKZA2l
 wQ9BHtc5YfU7ePa+1XuXDfd1wDgF3lxETMcIpjKDODS7hRfFD0b/q3Hv9zWzaug4C70+pU
 JMSNVvJ7sbXxrW2nAAAADnZhZ3JhbnRAazhzLTAxAQIDBA==
 -----END OPENSSH PRIVATE KEY-----'
+
+control_plane_label = if Gem::Version.new(helm_version) >= Gem::Version.new('1.20') then 'node-role.kubernetes.io/control-plane' else 'node-role.kubernetes.io/master' end
 
 Vagrant.configure("2") do |config_all|
     # always use Vagrants insecure key
@@ -476,7 +477,7 @@ EOF
 
                     if nodes < 3
                         config.vm.provision "AllowPodOnMaster", type: "shell", name: 'Allowing pods to be scheduled on master node', inline: "
-                            kubectl get nodes #{root_hostname} -o jsonpath='{.spec.taints}' | grep -q NoSchedule && kubectl taint node #{root_hostname} node-role.kubernetes.io/master:NoSchedule- || /bin/true
+                            kubectl get nodes #{root_hostname} -o jsonpath='{.spec.taints}' | grep -q NoSchedule && kubectl taint node #{root_hostname} #{control_plane_label}:NoSchedule- || /bin/true
                         "
                     end
 
@@ -695,61 +696,16 @@ EOF
                 end # Heketi
             end # Gluster
 
-            if k8s_version && helm_version
-                if master
-                    config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-                        which helm >/dev/null 2>&1 || (
-                            echo \"Downloading and installing Helm #{helm_version}\" && \\
-                            curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
-                            mv linux-amd64/helm /usr/local/bin && \\
-                            rm -rf linux-amd64 && \\
-                            ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
-                        )
-                    "
-                    if Gem::Version.new(helm_version) < Gem::Version.new('3')
-                        config.vm.provision "TillerInstall", :type => "shell", :name => "Installing Tiller", :inline => <<-EOF
-                            echo '---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: tiller
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: tiller
-  namespace: tiller
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: tiller-manager
-  namespace: tiller
-rules:
-- apiGroups: ["", "extensions", "apps"]
-  resources: ["configmaps"]
-  verbs: ["*"]
----
-kind: RoleBinding
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: tiller-binding
-  namespace: tiller
-subjects:
-- kind: ServiceAccount
-  name: tiller
-  namespace: tiller
-roleRef:
-  kind: Role
-  name: tiller-manager
-  apiGroup: rbac.authorization.k8s.io' | kubectl apply -f -
-                            sudo -u #{vagrant_user} helm init --service-account tiller --tiller-namespace #{tiller_namespace}
-                            grep -q 'alias helm=' /etc/bash.bashrc || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
-                            sudo -u #{vagrant_user} helm repo update
-                            sudo -u #{vagrant_user} helm init --upgrade
-                        EOF
-                    end # Tiller
-                end
+            if k8s_version && helm_version && master
+                config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+                    which helm >/dev/null 2>&1 || (
+                        echo \"Downloading and installing Helm #{helm_version}\" && \\
+                        curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+                        mv linux-amd64/helm /usr/local/bin && \\
+                        rm -rf linux-amd64 && \\
+                        ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+                    )
+                "
             end # Helm
 
 
@@ -812,14 +768,14 @@ podSecurityContext:
 #  storageClass: "glusterfs"
 
 tolerations:
-- key: node-role.kubernetes.io/master
+- key: #{control_plane_label}
   operator: Equal
   effect: NoExecute
-- key: node-role.kubernetes.io/master
+- key: #{control_plane_label}
   operator: Equal
   effect: NoSchedule
 nodeSelector:
-  node-role.kubernetes.io/master: ""
+  #{control_plane_label}: ""
 
 ingressRoute:
   dashboard:
