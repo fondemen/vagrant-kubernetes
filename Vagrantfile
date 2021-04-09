@@ -40,9 +40,9 @@ if not plugins_to_install.empty?
 end
 
 memory = read_env 'MEM', '2048'
-master_memory = read_env 'MASTER_MEM', '2048'
-cpus = read_env 'CPU', '1'
-master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
+master_memory = read_env 'MASTER_MEM', '3072'
+cpus = read_env 'CPU', '2'
+master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 3].max).to_s # 2 CPU min for master
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
