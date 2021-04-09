@@ -6,13 +6,14 @@ export LINSTOR=true
 export INIT=false
 vagrant box update
 vagrant up
-vagrant package --output k8s.box
-vagrant box remove k8s
-vagrant box add k8s k8s.box
+rm k8sl.box
+vagrant package --output k8sl.box
+vagrant box remove k8sl
+vagrant box add k8sl k8sl.box
 
 #### Testing ####
 unset UPGRADE
 unset GUEST_ADDITIONS
 unset INIT
-export BOX=k8s
+export BOX=k8sl
 vagrant up

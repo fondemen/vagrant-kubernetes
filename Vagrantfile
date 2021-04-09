@@ -46,16 +46,22 @@ master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for m
 nodes = (read_env 'NODES', 3).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
-docker_version = read_env 'DOCKER_VERSION', '19.03.11' # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
-docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
+own_image = read_bool_env 'K8S_IMAGE'
 
-k8s_version = read_env 'K8S_VERSION', '1.18'
+docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
+docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
+containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else '1.4' end)
+
+compose = read_env 'COMPOSE_VERSION', false
+raise "Docker Compose requires Docker to be installed first" unless docker_version
+
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
-k8s_db_version = read_env 'K8S_DB_VERSION', 'latest'
+k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
-box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.18')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
+box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
@@ -73,34 +79,18 @@ case cni
         calico = true
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
-end
-calico_version = read_env 'CALICO_VERSION', 'latest' if calico
+end if k8s_version
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18.1' else 'latest' end) if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
-
-if read_bool_env 'GLUSTER', false
-    raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
-
-    gluster_version = read_env 'GLUSTER_VERSION', '7'
-    gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
-    heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
-    raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
-    heketi_admin_secret = read_env 'HEKETI_ADMIN', "My Secret"
-    heketi_secret = read_env 'HEKETI_PASSWORD', "My Secret"
-
-    gluster_replicas = read_env 'GLUSTER_REPLICAS', '2'
-else
-    gluster_version = false
-    heketi_version = false
-end
 
 if read_bool_env 'LINSTOR', true
     linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "master" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
-    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.24-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.28-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
-    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.13.1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.16.0" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_size = (read_env 'LINSTOR_DRBD_SIZE', 60).to_i
     linstor_pg_version = read_env 'LINSTOR_PG_VERSION', "12" # check https://hub.docker.com/_/postgres?tab=description
     linstor_zfs = false # not implemented yet
@@ -108,15 +98,7 @@ else
     linstor_kube_version = false
 end
 
-if gluster_version && linstor_kube_version
-  default_storage = (read_env 'DEFAULT_STORAGE', 'gluster').downcase
-elsif gluster_version
-  default_storage = 'gluster'
-elsif linstor_kube_version
-  default_storage = 'linstor'
-end
-
-# Directory root for additional vdisks for Gluster or Linstor
+# Directory root for additional vdisks for Linstor
 if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
   vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
 else
@@ -124,19 +106,18 @@ else
 end
 vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub(/^[^:]+:/, '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
-traefik_version = read_env 'TRAEFIK', '2.2'
+traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', '3.3.0' # check https://github.com/helm/helm/releases
-tiller_namespace = read_env 'TILLER_NS', 'tiller'
+helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.3' else false end) # check https://github.com/helm/helm/releases
+raise "Helm is supported as from version 3" if Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 raise "Linstor requires Helm to be installed" if linstor_kube_version && !helm_version
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
-raise "Traefik requires Helm v3+" if traefik_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.2.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.11.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
@@ -211,6 +192,8 @@ wQ9BHtc5YfU7ePa+1XuXDfd1wDgF3lxETMcIpjKDODS7hRfFD0b/q3Hv9zWzaug4C70+pU
 JMSNVvJ7sbXxrW2nAAAADnZhZ3JhbnRAazhzLTAxAQIDBA==
 -----END OPENSSH PRIVATE KEY-----'
 
+control_plane_label = if Gem::Version.new(helm_version) >= Gem::Version.new('1.20') then 'node-role.kubernetes.io/control-plane' else 'node-role.kubernetes.io/master' end
+
 Vagrant.configure("2") do |config_all|
     # always use Vagrants insecure key
     config_all.ssh.insert_key = false
@@ -281,8 +264,9 @@ Vagrant.configure("2") do |config_all|
                 add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
                 apt-get update
                 DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
+                CONTAINERD_VERSION=$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')
                 echo \"Installing Docker $DOCKER_VERSION\"
-                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io
+                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
                 apt-mark hold docker-ce docker-ce-cli containerd.io
             fi
             if [ ! -f /etc/docker/daemon.json ]; then
@@ -346,44 +330,6 @@ EOF
         curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
         curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
     " if calico_version && !init
-
-    # Gluster installation
-    if gluster_version
-        config_all.vm.provision "GlusterInstall", type: "shell", name: 'Installing GlusterFS', inline: "
-            if ! which gluster >/dev/null; then
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                curl -s https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/rsa.pub | apt-key add -
-                DEBID=$(grep 'VERSION_ID=' /etc/os-release | cut -d '=' -f 2 | tr -d '\"')
-                DEBVER=$(grep 'VERSION=' /etc/os-release | grep -Eo '[a-z]+')
-                DEBARCH=$(dpkg --print-architecture)
-                echo \"deb https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/LATEST/Debian/${DEBID}/${DEBARCH}/apt ${DEBVER} main\" > /etc/apt/sources.list.d/gluster.list
-                apt-get update
-                apt-get install --yes glusterfs-server glusterfs-client xfsprogs
-            fi
-            systemctl start glusterd
-            systemctl enable glusterd
-        "
-
-        # Heketi installation
-        if k8s_version && heketi_version
-            config_all.vm.provision "HeketiUser", type: "shell", name: 'Authorizing Heketi', inline: "
-                useradd -m heketi
-                grep -q 'Defaults:heketi !requiretty' /etc/sudoers || echo 'Defaults:heketi !requiretty' >> /etc/sudoers
-                grep -q 'heketi ALL=' /etc/sudoers || echo 'heketi ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers
-            "
-            config_all.vm.provision "HeketiBinaries", type: "shell", name: 'Downloading Heketi binaries', inline: "
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                if [ ! -x /usr/local/bin/heketi-cli ]; then
-                    apt-get install --yes lvm2
-                    echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
-                    mv ./heketi/heketi /usr/local/bin/
-                    mv ./heketi/heketi-cli /usr/local/bin/
-                fi
-            " unless init
-        end
-    end
 
     config_all.vm.provision "HelmDownload", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
         which helm >/dev/null 2>&1 || (
@@ -547,6 +493,16 @@ EOF
                 ssh -o StrictHostKeyChecking=no #{root_hostname} 'ssh-keyscan #{hostname} >> /root/.ssh/known_hosts'
             "
 
+            if compose && master
+                    config_all.vm.provision "DockerComposeInstall", :type => "shell", :name => 'Installing Docker Compose', :inline => "
+                    if [ ! -x /usr/local/bin/docker-compose ]; then
+                        curl -s -L \"https://github.com/docker/compose/releases/download/#{compose}/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose
+                        chmod +x /usr/local/bin/docker-compose
+                        curl -s -L https://raw.githubusercontent.com/docker/compose/#{compose}/contrib/completion/bash/docker-compose -o /etc/bash_completion.d/docker-compose
+                    fi
+                "
+            end # Compose
+
             if k8s_version
                 config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
                     grep -q 1 /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && sysctl -p /etc/sysctl.conf
@@ -582,7 +538,7 @@ EOF
 
                     if nodes < 3
                         config.vm.provision "AllowPodOnMaster", type: "shell", name: 'Allowing pods to be scheduled on master node', inline: "
-                            kubectl get nodes #{root_hostname} -o jsonpath='{.spec.taints}' | grep -q NoSchedule && kubectl taint node #{root_hostname} node-role.kubernetes.io/master:NoSchedule- || /bin/true
+                            kubectl get nodes #{root_hostname} -o jsonpath='{.spec.taints}' | grep -q NoSchedule && kubectl taint node #{root_hostname} #{control_plane_label}:NoSchedule- || /bin/true
                         "
                     end
 
@@ -617,249 +573,22 @@ subjects:
                 end
             end # k8s
 
-            if gluster_version
-                # Additional disk for GlusterFS storage
-                config.vm.provider :virtualbox do |vb|
-                    vb.name = hostname
-                    gluster_disk_file = File.join(vdisk_root, hostname, "gluster-#{hostname}.vdi")
-                    unless File.exist?(gluster_disk_file)
-                        vb.customize ['createhd', '--filename', gluster_disk_file, '--format', 'VDI', '--size', gluster_size * 1024]
-                    end
-                    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', 0, '--type', 'hdd', '--medium', gluster_disk_file]
-                end
-                config.vm.provision "GlusterPartition", type: "shell", name: 'Creating an XFS partition for Gluster', inline: "
-                    [ -e /dev/sdb1 ] || cat <<EOF | fdisk /dev/sdb
-n
-p
-1
-
-
-w
-EOF
-                    #file -sL /dev/sdb1 | grep -q XFS || mkfs.xfs /dev/sdb1
-                    #grep -q '/dev/sdb1' /etc/fstab || echo '/dev/sdb1 /export/sdb1 xfs defaults 0 0' >> /etc/fstab
-                    #mkdir -p /export/sdb1 && mount -a && mkdir -p /export/sdb1/brick
+            if k8s_version && helm_version && master
+                config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
+                    which helm >/dev/null 2>&1 || (
+                        echo \"Downloading and installing Helm #{helm_version}\" && \\
+                        curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
+                        mv linux-amd64/helm /usr/local/bin && \\
+                        rm -rf linux-amd64 && \\
+                        ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
+                    )
                 "
-
-                unless master
-                    # Joining Gluster
-                    config.vm.provision "GlusterJoin", type: "shell", name: 'Joining the Gluster cluster', inline: "
-                        ssh -o StrictHostKeyChecking=no #{root_hostname} 'gluster pool list' | grep -q #{hostname} || ssh #{root_hostname} 'gluster peer probe #{hostname}'
-                    "
-                end
-
-                if k8s_version && heketi_version
-                    if master
-                        # Installing Heketi on master
-                        config.vm.provision "HeketiSSHKeys", type: "shell", name: 'Creating Heketi SSH keys', inline: "
-                            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                            export DEBIAN_FRONTEND=noninteractive
-                            if [ ! -x /usr/local/bin/heketi-cli ]; then
-                                apt-get install --yes lvm2
-                                echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
-                                mv ./heketi/heketi /usr/local/bin/
-                                mv ./heketi/heketi-cli /usr/local/bin/
-                            fi
-                            if [ ! -f /home/heketi/.ssh/id_rsa ]; then
-                                sudo -u heketi ssh-keygen -t rsa -b 4096 -m PEM -f /home/heketi/.ssh/id_rsa -q -N \"\"
-                                sed -i 's/#{hostname}/#{ip}/' /home/heketi/.ssh/id_rsa.pub
-                            fi
-                        "
-                        config.vm.provision "HeketiInstall", type: "shell", name: 'Installing Heketi', inline: <<-EOF
-                            mkdir -p /etc/heketi
-                            mkdir -p /var/lib/heketi
-                            chown -R heketi:heketi /var/lib/heketi
-                            [ -f /etc/heketi/heketi.json ] || cat > /etc/heketi/heketi.json <<EOL
-{
-    "_port_comment": "Heketi Server Port Number",
-    "port" : "8080",
-
-    "_use_auth": "Enable JWT authorization. Please enable for deployment",
-    "use_auth" : false,
-
-    "_jwt" : "Private keys for access",
-    "jwt" : {
-        "_admin" : "Admin has access to all APIs",
-        "admin" : {
-            "key" : "#{heketi_admin_secret}"
-        },
-        "_user" : "User only has access to /volumes endpoint",
-        "user" : {
-            "key" : "#{heketi_secret}"
-        }
-    },
-
-    "_glusterfs_comment": "GlusterFS Configuration",
-    "glusterfs" : {
-
-        "_executor_comment": "Execute plugin. Possible choices: mock, ssh",
-        "executor" : "ssh",
-
-        "_db_comment": "Database file name",
-        "db" : "/var/lib/heketi/heketi.db",
-
-        "_sshexec_comment": "SSH username and private key file information",
-        "sshexec": {
-            "keyfile": "/home/heketi/.ssh/id_rsa",
-            "user": "heketi",
-            "sudo": true,
-            "port": "22",
-            "fstab": "/etc/fstab",
-            "backup_lvm_metadata": false,
-            "debug_umount_failures": true
-        },
-        
-        "_db_comment": "Database file name",
-        "db": "/var/lib/heketi/heketi.db"
-    }
-}
-EOL
-                            [ -f /etc/systemd/system/heketi.service ] || cat > /etc/systemd/system/heketi.service <<EOL
-[Unit]
-Description=Heketi REST API Service
-Documentation=
-After=network.target
-
-[Service]
-User=heketi
-Group=heketi
-UMask=077
-ExecStart=/usr/local/bin/heketi --config=/etc/heketi/heketi.json
-Restart=on-failure
-
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=heketi
-
-[Install]
-WantedBy=multi-user.target
-EOL
-                            if [ ! -f /etc/rsyslog.d/heketi.conf ]; then
-                                cat > /etc/rsyslog.d/heketi.conf <<EOL
-if \\$programname == 'heketi' then /var/log/heketi.log
-& stop
-EOL
-                                systemctl restart rsyslog
-                            fi
-                            systemctl enable heketi
-                            systemctl start heketi
-                            CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
-                            [ -n "$CLUSTER_ID" ] || heketi-cli cluster create || ( sleep 10 &&  heketi-cli cluster create )
-EOF
-                    end
-
-                    config.vm.provision "HeketiAddNode", :type => "shell", :name => "Adding #{hostname} to Heketi", :inline => "
-                        sudo -u heketi mkdir -p /home/heketi/.ssh/
-                        sudo -u heketi touch /home/heketi/.ssh/authorized_keys
-                        chmod 600 /home/heketi/.ssh/authorized_keys
-                        grep -q 'heketi@#{root_ip}' /home/heketi/.ssh/authorized_keys || ssh -o StrictHostKeyChecking=no #{root_hostname} 'cat /home/heketi/.ssh/id_rsa.pub 2>/dev/null' >> /home/heketi/.ssh/authorized_keys
-                        ssh root@#{root_hostname} sudo -u heketi ssh -o StrictHostKeyChecking=no #{ip} /bin/true
-                        CLUSTER_ID=$(ssh root@#{root_hostname} heketi-cli cluster list | tail -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
-                        NODES=$(ssh root@#{root_hostname} heketi-cli node list | grep $CLUSTER_ID | awk '{print $1;}' | cut -d : -f 2)
-                        NODE_ID=$(for NODE in $NODES ; do INFO=$(ssh root@#{root_hostname} heketi-cli node info $NODE); echo $INFO | grep -q #{ip} && echo $NODE; done)
-                        [ -n \"$NODE_ID\" ] || ssh root@#{root_hostname} heketi-cli node list | grep -q #{ip} || ssh root@#{root_hostname} heketi-cli node add --zone=1 --cluster=$CLUSTER_ID --management-host-name=#{ip} --storage-host-name=#{ip}
-                        until [ -n \"$NODE_ID\" ]; do NODES=$(ssh root@#{root_hostname} heketi-cli node list | grep $CLUSTER_ID | awk '{print $1;}' | cut -d : -f 2); NODE_ID=$(for NODE in $NODES ; do INFO=$(ssh root@#{root_hostname} heketi-cli node info $NODE); echo $INFO | grep -q #{ip} && echo $NODE; done); done
-                        DEVICE_ID=$(ssh root@#{root_hostname} heketi-cli node info $NODE_ID | sed -n '/Devices:/,$p' | grep 'Id:' | awk '{print $1;}' | cut -d : -f 2)
-                        [ -n \"$DEVICE_ID\" ] || ssh root@#{root_hostname} heketi-cli device add --name=/dev/sdb1 --node=$NODE_ID
-                    "
-
-                    if master
-                        config.vm.provision "HeketiForK8s", :type => "shell", :name => "Setting-up Heketi for Kubernetes", :inline => <<-EOF
-                            kubectl get storageclasses.storage.k8s.io 2>/dev/null | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
-apiVersion: v1
-kind: Namespace
-metadata:
-    name: heketi
----
-apiVersion: v1
-kind: Secret
-metadata:
-    name: heketi-secret
-    namespace: heketi
-type: kubernetes.io/glusterfs
-data:
-    key: $(echo -n #{heketi_admin_secret} | base64)
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-    name: glusterfs
-    #{if 'gluster' == default_storage then "annotations:
-      storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
-provisioner: kubernetes.io/glusterfs
-parameters:
-    resturl: \\"http://#{root_ip}:8080\\"
-    clusterid: \\"$CLUSTER_ID\\"
-    restauthenabled: \\"true\\"
-    restuser: \\"admin\\"
-    secretNamespace: heketi
-    secretName: \\"heketi-secret\\"
-    volumetype: \\"replicate:#{gluster_replicas}\\"" | kubectl apply -f -
-EOF
-                    end
-                end # Heketi
-            end # Gluster
-
-            if k8s_version && helm_version
-                if master
-                    config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
-                        which helm >/dev/null 2>&1 || (
-                            echo \"Downloading and installing Helm #{helm_version}\" && \\
-                            curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
-                            mv linux-amd64/helm /usr/local/bin && \\
-                            rm -rf linux-amd64 && \\
-                            ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
-                        )
-                    "
-                    if Gem::Version.new(helm_version) < Gem::Version.new('3')
-                        config.vm.provision "TillerInstall", :type => "shell", :name => "Installing Tiller", :inline => <<-EOF
-                            echo '---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: tiller
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: tiller
-  namespace: tiller
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: tiller-manager
-  namespace: tiller
-rules:
-- apiGroups: ["", "extensions", "apps"]
-  resources: ["configmaps"]
-  verbs: ["*"]
----
-kind: RoleBinding
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: tiller-binding
-  namespace: tiller
-subjects:
-- kind: ServiceAccount
-  name: tiller
-  namespace: tiller
-roleRef:
-  kind: Role
-  name: tiller-manager
-  apiGroup: rbac.authorization.k8s.io' | kubectl apply -f -
-                            sudo -u #{vagrant_user} helm init --service-account tiller --tiller-namespace #{tiller_namespace}
-                            grep -q 'alias helm=' /etc/bash.bashrc || echo 'alias helm=\"helm --tiller-namespace #{tiller_namespace}\"' >> /etc/bash.bashrc
-                            sudo -u #{vagrant_user} helm repo update
-                            sudo -u #{vagrant_user} helm init --upgrade
-                        EOF
-                    end # Tiller
-                end
             end # Helm
 
             if linstor_kube_version
 
-                linstor_cmd = "kubectl exec -n #{linstor_ns} #{linstor_ns}-linstor-controller-0 -c linstor-controller -- linstor"
+                linstor_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-controller -o jsonpath=\"{.items[0].metadata.name}\") -c linstor-controller -- linstor"
+                stork_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-stork -o jsonpath=\"{.items[0].metadata.name}\") -c stork -- /storkctl"
 
                 if master
 
@@ -889,12 +618,18 @@ spec:
           path: /var/lib/linstor/db
           type: DirectoryOrCreate
       nodeSelector:
-        node-role.kubernetes.io/master: ""
+        #{control_plane_label}: ""
       tolerations:
       - key: node-role.kubernetes.io/master
         operator: Equal
         effect: NoExecute
       - key: node-role.kubernetes.io/master
+        operator: Equal
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Equal
+        effect: NoExecute
+      - key: node-role.kubernetes.io/control-plane
         operator: Equal
         effect: NoSchedule
       containers:
@@ -946,15 +681,18 @@ EOF
                         K8S_SCHEDULER_IMAGE=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f1)
                         helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo "
 controller:
+  replicaCount: 1
   db:
     user: linstor
     password: #{linstor_password}
     connectionUrl: jdbc:postgresql://linstor-db/linstor
   nodeSelector:
-    node-role.kubernetes.io/master: \\"\\"
+    #{control_plane_label}: \\"\\"
   tolerations: 
   - effect: NoSchedule
     key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
 
 ssl:
   enabled: false
@@ -966,19 +704,19 @@ satellite:
     enabled: false
   tolerations: 
   - effect: NoSchedule
-    key: node-role.kubernetes.io/master 
+    key: node-role.kubernetes.io/master
   - effect: NoSchedule
-    key: node.kubernetes.io/unschedulable
+    key: node-role.kubernetes.io/control-plane
 
 stork:
   replicaCount: 1
   tolerations:
   - effect: NoSchedule
-    key: node-role.kubernetes.io/master 
+    key: node-role.kubernetes.io/master
   - effect: NoSchedule
-    key: node.kubernetes.io/unschedulable
+    key: node-role.kubernetes.io/control-plane
   #{if nodes < 5 then "nodeSelector:
-    node-role.kubernetes.io/master: \\\"\\\"" else "" end}
+    #{control_plane_label}: \\\"\\\"" else "" end}
 
 storkScheduler:
   image:
@@ -987,28 +725,33 @@ storkScheduler:
   replicaCount: 1
   tolerations:
   - effect: NoSchedule
-    key: node-role.kubernetes.io/master 
+    key: node-role.kubernetes.io/master
   - effect: NoSchedule
-    key: node.kubernetes.io/unschedulable
+    key: node-role.kubernetes.io/control-plane
   #{if nodes < 5 then "nodeSelector:
-    node-role.kubernetes.io/master: \\\"\\\"" else "" end}
+    #{control_plane_label}: \\\"\\\"" else "" end}
 
     
 csi:
   controller:
+    replicaCount: 1
     nodeSelector:
-      node-role.kubernetes.io/master: \\"\\"
+      #{control_plane_label}: \\"\\"
     tolerations:
     - effect: NoSchedule
-      key: node-role.kubernetes.io/master 
+      key: node-role.kubernetes.io/master
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/control-plane
   node:
     tolerations:
     - effect: NoSchedule
-      key: node-role.kubernetes.io/master 
+      key: node-role.kubernetes.io/master
     - effect: NoSchedule
-      key: node.kubernetes.io/unschedulable" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor/helm/kube-linstor -f -
+      key: node-role.kubernetes.io/control-plane
+haController:
+  enabled: false" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor/helm/kube-linstor -f -
                         grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"#{linstor_cmd}\"' >> /etc/bash.bashrc
-                        grep -q 'alias storkctl=' /etc/bash.bashrc || echo 'alias storkctl=\"kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=#{linstor_ns}-linstor-stork -o jsonpath=\\"{.items[0].metadata.name}\\") -c stork -- /storkctl\"' >> /etc/bash.bashrc
+                        grep -q 'alias storkctl=' /etc/bash.bashrc || echo 'alias storkctl=\"#{stork_cmd}\"' >> /etc/bash.bashrc
                         #{linstor_cmd} node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
                         until #{linstor_cmd} node list >/dev/null 2>&1; do sleep 3; done
 EOF
@@ -1026,8 +769,8 @@ EOF
                     )
                 "
 
-                drbd_disk = if gluster_version then "/dev/sdc" else "/dev/sdb" end
-                drbd_disk_nr = if gluster_version then 1 else 0 end
+                drbd_disk = "/dev/sdb"
+                drbd_disk_nr = 0
                 # Additional disk for DRBD storage
                 config.vm.provider :virtualbox do |vb|
                     vb.name = hostname
@@ -1041,7 +784,7 @@ EOF
                   pvs 2>/dev/null | grep -q #{drbd_disk} || pvcreate #{drbd_disk}
                   vgs 2>/dev/null | grep -q 'linvg' || vgcreate linvg #{drbd_disk}
                   lvs 2>/dev/null | grep -q 'linlv' || lvcreate -L #{drbd_size*1024-256}M --thinpool linlv linvg
-                  ssh root@#{root_hostname} '#{linstor_cmd} storage-pool list -n #{hostname} -s default | grep -q #{hostname} || #{linstor_cmd} storage-pool create lvmthin #{hostname} default linvg/linlv'
+                  ssh root@#{root_hostname} 'until #{linstor_cmd} storage-pool list -n #{hostname} -s default | grep -q #{hostname}; do sleep 5; #{linstor_cmd} storage-pool create lvmthin #{hostname} default linvg/linlv; done'
                 "
 
                 if master
@@ -1051,8 +794,8 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: "linstor"
-  #{if 'linstor' == default_storage then "annotations:
-    storageclass.kubernetes.io/is-default-class: \"true\"" else "" end}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
 provisioner: linstor.csi.linbit.com
 parameters:
   autoPlace: "2"
@@ -1083,16 +826,26 @@ EOF
             if k8s_version && helm_version && traefik_version
                 if master
                     config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
-                        helm repo list | grep -q traefik || ( helm repo add traefik https://containous.github.io/traefik-helm-chart && helm repo update )
+                        helm repo list | grep -q traefik || ( helm repo add traefik https://helm.traefik.io/traefik && helm repo update )
                         kubectl get namespaces traefik > /dev/null 2>&1 || kubectl create namespace traefik
+                        kubectl get ingressclasses.networking.k8s.io > /dev/null 2>&1 && ( kubectl get ingressclasses.networking.k8s.io traefik-lb >/dev/null 2>&1 || echo '
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata: 
+  name: traefik
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: traefik.io/ingress-controller' | kubectl apply -f - )
                         helm -n traefik status traefik 2>/dev/null | grep -q deployed || echo '
-image:
-  tag: #{traefik_version}
+#{if 'latest' == traefik_version then '' else "image:
+  tag: \"#{traefik_version}\"" end}
 
 globalArguments:
 - "--global.checknewversion"
 additionalArguments:
 - "--providers.kubernetesingress"
+- "--providers.kubernetesingress.ingressclass=traefik"
 
 service:
   enabled: false
@@ -1124,9 +877,6 @@ securityContext:
 podSecurityContext:
   fsGroup: 0
 
-#persistence:
-#  storageClass: "glusterfs"
-
 tolerations:
 - key: node-role.kubernetes.io/master
   operator: Equal
@@ -1134,8 +884,14 @@ tolerations:
 - key: node-role.kubernetes.io/master
   operator: Equal
   effect: NoSchedule
+- key: node-role.kubernetes.io/control-plane
+  operator: Equal
+  effect: NoExecute
+- key: node-role.kubernetes.io/control-plane
+  operator: Equal
+  effect: NoSchedule
 nodeSelector:
-  node-role.kubernetes.io/master: ""
+  #{control_plane_label}: ""
 
 ingressRoute:
   dashboard:
