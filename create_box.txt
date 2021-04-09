@@ -4,11 +4,13 @@ export GUEST_ADDITIONS=true
 export INIT=false
 vagrant box update
 vagrant up
+rm k8s.box
 vagrant package --output k8s.box
 vagrant box remove k8s
 vagrant box add k8s k8s.box
 
 #### Testing ####
+vagrant destroy -f default
 unset UPGRADE
 unset GUEST_ADDITIONS
 unset INIT
