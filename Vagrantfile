@@ -322,13 +322,13 @@ EOF
         " unless init
 
         config_all.vm.provision "K8SDashboardImages", type: "shell", name: 'Downloading Kubernetes Dashboard images', inline: "
-            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
         " unless init
     end
 
     config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
-        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
-        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
+        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
+        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
     " if calico_version && !init
 
     config_all.vm.provision "HelmDownload", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
@@ -342,7 +342,7 @@ EOF
     " if helm_version && !init
 
     config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-        docker image pull -q traefik:#{traefik_version}
+        crictl pull traefik:#{traefik_version}
     " if traefik_version && !init
 
     # Linstor / DRBBD installation
