@@ -48,18 +48,31 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
-docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
-containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else '1.4' end)
-
-compose = read_env 'COMPOSE_VERSION', false
-raise "Docker Compose requires Docker to be installed first" unless docker_version
-
 k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
 k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
+
+cri = (read_env 'CRI', if Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then 'containerd' else 'docker' end).downcase
+
+containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else 'latest' end)
+docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' elsif cri != 'docker' && Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then false else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
+docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
+
+case cri
+when 'docker'
+    raise "CRI defined as Docker while Docker is disabled" unless docker_version
+    cri_socket = '/var/run/dockershim.sock'
+when 'containerd'
+    raise "CRI defined as contained while containerd is disabled" unless containerd_version
+    cri_socket = '/run/containerd/containerd.sock'
+#when 'cri-o'
+#    raise "CRI defined as contained while containerd is disabled" unless crio_version
+#    cri_socket = '/var/run/crio/crio.sock'
+else
+    raise "Unknown CRI: #{cri} ; choose between containerd and docker"
+end
 
 box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
@@ -85,7 +98,7 @@ calico_url = if calico_version then if 'latest' == calico_version then 'https://
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
 if read_bool_env 'LINSTOR', true
-    linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "master" # check https://github.com/kvaps/kube-linstor/releases
+    linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "latest" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
     drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.28-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
@@ -250,10 +263,10 @@ Vagrant.configure("2") do |config_all|
         "
     end if init
 
-    # Docker Installation
-    if docker_version
-        config_all.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
-            if ! which docker >/dev/null; then
+    # docker repos
+    if containerd_version || docker_version
+        config_all.vm.provision "DockerPackages", :type => "shell", :name => 'Configuring Docker repository', :inline => "
+            if ! apt-cache policy | grep -q docker; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
                 apt-get update
@@ -263,8 +276,50 @@ Vagrant.configure("2") do |config_all|
                 apt-key fingerprint #{docker_repo_fingerprint}
                 add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
                 apt-get update
+            fi
+        "
+    end
+
+    # containerd Installation
+    if containerd_version
+        config_all.vm.provision "ContainerdInstall", :type => "shell", :name => 'Installing containerd', :inline => "
+            [ -f /etc/modules-load.d/containerd.conf ] || touch /etc/modules-load.d/containerd.conf
+            grep -q overlay /etc/modules-load.d/containerd.conf || echo overlay >> /etc/modules-load.d/containerd.conf
+            grep -q br_netfilter /etc/modules-load.d/containerd.conf || echo br_netfilter >> /etc/modules-load.d/containerd.conf
+            modprobe overlay
+            modprobe br_netfilter
+            [ -f /etc/sysctl.d/99-kubernetes-cri.conf ] || touch /etc/sysctl.d/99-kubernetes-cri.conf
+            grep -q 'net.bridge.bridge-nf-call-iptables' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.bridge.bridge-nf-call-iptables=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
+            grep -q 'net.ipv4.ip_forward' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
+            grep -q 'net.bridge.bridge-nf-call-ip6tables' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.bridge.bridge-nf-call-ip6tables=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
+            [ $(sysctl -n net.bridge.bridge-nf-call-iptables) == 1 ] || sysctl --system
+            [ $(sysctl -n net.ipv4.ip_forward) == 1 ] || sysctl --system
+            [ $(sysctl -n net.bridge.bridge-nf-call-ip6tables) == 1 ] || sysctl --system
+            if ! which containerd >/dev/null; then
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                CONTAINERD_VERSION=#{if containerd_version == 'latest' then "*" else "$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')" end}
+                echo \"Installing containerd $CONTAINERD_VERSION\"
+                apt-get install --yes containerd.io=$CONTAINERD_VERSION
+                apt-mark hold containerd.io
+                containerd config default > /etc/containerd/config.toml
+                systemctl restart containerd
+            fi
+            if ! grep -q 'SystemdCgroup' /etc/containerd/config.toml; then
+                sed -i 's/^\\([[:blank:]]*\\)\\[plugins\\.\"io\\.containerd\\.grpc\\.v1\\.cri\"\\.containerd\\.runtimes\\.runc\\.options\\]/&\\n\\1  SystemdCgroup = true/' /etc/containerd/config.toml
+                systemctl restart containerd
+            fi
+            "
+    end
+
+    # Docker Installation
+    if docker_version
+        config_all.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
+            if ! which docker >/dev/null; then
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
                 DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
-                CONTAINERD_VERSION=$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')
+                CONTAINERD_VERSION=#{if containerd_version == 'latest' then "*" else "$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')" end}
                 echo \"Installing Docker $DOCKER_VERSION\"
                 apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
                 apt-mark hold docker-ce docker-ce-cli containerd.io
@@ -291,8 +346,12 @@ EOF
 
     # Kubernetes installation
     if k8s_version
-        raise "Cannot install Kubernetes without Docker" unless docker_version
+        raise "Cannot install Kubernetes without Docker or containerd" unless docker_version || containerd_version
         config_all.vm.provision "K8SInstall", type: "shell", name: 'Installing Kubernetes', inline: "
+            grep -q 'net.bridge.bridge-nf-call-ip6tables' /etc/sysctl.d/k8s.conf || echo 'net.bridge.bridge-nf-call-ip6tables=1' >> /etc/sysctl.d/k8s.conf
+            grep -q 'net.bridge.bridge-nf-call-iptables' /etc/sysctl.d/k8s.conf || echo 'net.bridge.bridge-nf-call-iptables=1' >> /etc/sysctl.d/k8s.conf
+            [ $(sysctl -n net.bridge.bridge-nf-call-ip6tables) == 1 ] || sysctl --system
+            [ $(sysctl -n net.bridge.bridge-nf-call-iptables) == 1 ] || sysctl --system
             if ! which kubeadm >/dev/null; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
@@ -313,8 +372,11 @@ EOF
                 update-alternatives --set ebtables /usr/sbin/ebtables-legacy
                 apt-mark hold kubelet kubeadm kubectl
             fi
+            mkdir -p /etc/bash_completion.d
             [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
+            [ -f /etc/bash_completion.d/crictl ] || crictl --runtime-endpoint=unix://#{cri_socket} completion >/etc/bash_completion.d/crictl
             grep -q 'alias k=' /etc/bash.bashrc || echo 'alias k=kubectl' >> /etc/bash.bashrc
+            grep -q 'alias crictl=' /etc/bash.bashrc || echo \"alias crictl='sudo crictl --runtime-endpoint=unix://#{cri_socket}'\" >> /etc/bash.bashrc
             grep -q 'complete -F __start_kubectl k' /etc/bash.bashrc || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
             "
         config_all.vm.provision "K8SImages", type: "shell", name: 'Downloading Kubernetes images', inline: "
@@ -322,13 +384,13 @@ EOF
         " unless init
 
         config_all.vm.provision "K8SDashboardImages", type: "shell", name: 'Downloading Kubernetes Dashboard images', inline: "
-            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
+            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
         " unless init
     end
 
     config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
-        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
-        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
+        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
+        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
     " if calico_version && !init
 
     config_all.vm.provision "HelmDownload", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
@@ -337,39 +399,24 @@ EOF
             curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
             mv linux-amd64/helm /usr/local/bin && \\
             rm -rf linux-amd64 && \\
+            mkdir -p /etc/bash_completion.d && \\
             ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
         )
     " if helm_version && !init
 
     config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-        crictl pull traefik:#{traefik_version}
+        crictl --runtime-endpoint=unix://#{cri_socket} pull traefik:#{traefik_version}
     " if traefik_version && !init
 
     # Linstor / DRBBD installation
     if linstor_kube_version
 
         config_all.vm.provision "LinstorDownload", :type => "shell", :name => "Downloading Linstor", :inline => "
-            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-            export DEBIAN_FRONTEND=noninteractive
-            if [[ '#{linstor_kube_version}' =~ ^[0-9\\.-]+$ ]]; then
-              [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
-              [ -d kube-linstor ] && rm -rf kube-linstor
-              [ -L kube-linstor ] || ln -s kube-linstor-#{linstor_kube_version} kube-linstor
-            elif [ -d kube-linstor/.git ]; then
-              apt-get install -y git
-              cd kube-linstor
-              git reset --hard
-              git checkout #{linstor_kube_version}
-              git pull
-              cd ..
-            else
-              apt-get install -y git
-              git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
-            fi
+            helm repo list 2>/dev/null | grep -q kvaps || helm repo add kvaps https://kvaps.github.io/charts && helm repo update
             K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}' | cut -d- -f1)
-            helm template linstor kube-linstor/helm/kube-linstor/ --set storkScheduler.image.tag=v$K8S_VERSION | grep 'image:' | sed 's/image://' | xargs -I IMG docker image pull -q IMG
-            docker pull -q postgres:#{linstor_pg_version}
-            apt-get install -y linux-headers-amd64
+            helm template linstor #{if linstor_kube_version != 'latest' then "--version #{linstor_kube_version}" else "" end} kvaps/linstor --set storkScheduler.image.tag=v$K8S_VERSION --set haController.enabled=false | grep 'image:' | sed 's/image://' | sed 's/\"//g' | sed 's/ *$//g' | sed 's/^ *//g' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
+            crictl --runtime-endpoint=unix://#{cri_socket} pull postgres:#{linstor_pg_version}
+            apt-get install -y linux-headers-$(uname -r)
         " unless init
 
         # TODO: check https://packages.linbit.com/proxmox/dists/proxmox-6/drbd-9.0/binary-amd64/ for simpler install
@@ -381,7 +428,7 @@ EOF
             export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
             export DEBIAN_FRONTEND=noninteractive
             lsmod | grep -i drbd 1>/dev/null 2>&1 || (
-                mkdir drbd
+                mkdir -p drbd
                 cd drbd
                 dpkg-query -S drbd-utils >/dev/null || (
                     [ -f drbd-utils_#{drbd_utils_version}-1_amd64.deb ] || (
@@ -401,15 +448,15 @@ EOF
                     echo 'DRDB kernel module has to be compiled ; please, be patient'
                     [ -d drbd-#{drbd_version} ] || curl -sL https://www.linbit.com/downloads/drbd/#{drbd_simple_version}/drbd-#{drbd_version}.tar.gz | tar -xz
                     [ -d drdb-#{drbd_version}/debian ] || (
-                        curl -sL https://github.com/LINBIT/drbd/archive/drbd-#{drbd_version}.tar.gz | tar -xz
+                        curl -sL https://github.com/LINBIT/drbd/archive/refs/tags/drbd-#{drbd_version}.tar.gz | tar -xz
                         mv drbd-drbd-#{drbd_version}/debian drbd-#{drbd_version}/debian
                         rm -rf drbd-drbd-#{drbd_version}
                     )
                     cd drbd-#{drbd_version}
                     # check https://dev.tranquil.it/wiki/Xenserver_-_Cr%C3%A9er_des_paquets_Debian_drbd9
+                    apt-get install -y debhelper linux-headers-$(uname -r) dkms
                     make
                     make clean
-                    apt-get install -y debhelper linux-headers-amd64
                     dpkg-buildpackage -rfakeroot -b -uc
                     cd ..
                 )
@@ -432,8 +479,8 @@ EOF
                 grep -q backports /etc/apt/sources.list || (
                     echo \"deb http://deb.debian.org/debian $(lsb_release -cs)-backports main\" >> /etc/apt/sources.list
                 )
-                apt-get update 
-                apt-get install -y linux-headers-`uname -r`
+                apt-get update
+                apt-get install -y linux-headers-$(uname -r)
                 echo 'Installing ZFS ; this might take a while, be patient...'
                 apt-get install -y -t $(lsb_release -cs)-backports dkms spl-dkms
                 echo 'Installing ZFS ; this might take a while, be patient...'
@@ -493,16 +540,6 @@ EOF
                 ssh -o StrictHostKeyChecking=no #{root_hostname} 'ssh-keyscan #{hostname} >> /root/.ssh/known_hosts'
             "
 
-            if compose && master
-                    config_all.vm.provision "DockerComposeInstall", :type => "shell", :name => 'Installing Docker Compose', :inline => "
-                    if [ ! -x /usr/local/bin/docker-compose ]; then
-                        curl -s -L \"https://github.com/docker/compose/releases/download/#{compose}/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose
-                        chmod +x /usr/local/bin/docker-compose
-                        curl -s -L https://raw.githubusercontent.com/docker/compose/#{compose}/contrib/completion/bash/docker-compose -o /etc/bash_completion.d/docker-compose
-                    fi
-                "
-            end # Compose
-
             if k8s_version
                 config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
                     grep -q 1 /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && sysctl -p /etc/sysctl.conf
@@ -518,7 +555,7 @@ EOF
                     cidr = if flannel then '10.244.0.0/16' elsif calico then '192.168.0.0/16' else raise "Undefined CNI provider (try using CIDR env var)" end
 
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=#{cidr} #{if k8s_version.split('.').length > 2 then "--kubernetes-version #{k8s_version}" else '' end} | tee /root/k8sjoin.txt; fi
+                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --cri-socket=#{cri_socket} --pod-network-cidr=#{cidr} #{if k8s_version.split('.').length > 2 then "--kubernetes-version #{k8s_version}" else '' end} | tee /root/k8sjoin.txt; fi
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
                         "
@@ -580,6 +617,7 @@ subjects:
                         curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
                         mv linux-amd64/helm /usr/local/bin && \\
                         rm -rf linux-amd64 && \\
+                        mkdir -p /etc/bash_completion.d && \\
                         ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
                     )
                 "
@@ -587,7 +625,7 @@ subjects:
 
             if linstor_kube_version
 
-                linstor_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-controller -o jsonpath=\"{.items[0].metadata.name}\") -c linstor-controller -- linstor"
+                linstor_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-controller -o jsonpath=\"{.items[0].metadata.name}\" 2>/dev/null) -c linstor-controller -- linstor"
                 stork_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-stork -o jsonpath=\"{.items[0].metadata.name}\") -c stork -- /storkctl"
 
                 if master
@@ -666,16 +704,7 @@ spec:
 EOF
 
                     config.vm.provision "Linstor", :type => "shell", :name => "Setting-up Linstor", :inline => <<-EOF
-                        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                        export DEBIAN_FRONTEND=noninteractive
-                        if [[ '#{linstor_kube_version}' =~ ^[0-9\\.-]+$ ]]; then
-                          [ -d kube-linstor-#{linstor_kube_version} ] || curl -sL https://github.com/kvaps/kube-linstor/archive/v#{linstor_kube_version}.tar.gz | tar -xz
-                          [ -d kube-linstor ] && rm -rf kube-linstor
-                          [ -L kube-linstor ] || ln -s kube-linstor-#{linstor_kube_version} kube-linstor
-                        elif [ ! -d kube-linstor/.git ]; then
-                          which git >/dev/null 2>&1 || apt-get install -y git
-                          git clone -b #{linstor_kube_version} https://github.com/kvaps/kube-linstor.git
-                        fi
+                        helm repo list 2>/dev/null | grep -q kvaps || helm repo add kvaps https://kvaps.github.io/charts && helm repo update
                         K8S_SCHEDULER_IMAGE=$(kubectl -n kube-system get pods --no-headers -o custom-columns=":..image" | grep kube-scheduler | head -1 | cut -d, -f1)
                         K8S_SCHEDULER_IMAGE_TAG=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f2)
                         K8S_SCHEDULER_IMAGE=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f1)
@@ -749,7 +778,9 @@ csi:
     - effect: NoSchedule
       key: node-role.kubernetes.io/control-plane
 haController:
-  enabled: false" | helm -n #{linstor_ns} upgrade --install linstor kube-linstor/helm/kube-linstor -f -
+  enabled: false" | helm -n #{linstor_ns} install --wait linstor #{if linstor_kube_version != 'latest' then "--version #{linstor_kube_version}" else "" end} kvaps/linstor -f -
+                        # temporary pach for https://github.com/kvaps/kube-linstor/issues/34
+                        kubectl get clusterrole linstor-stork-scheduler -o jsonpath="{.rules[?(@['apiGroups'][0]=='storage.k8s.io')].resources[?(@)]}" | grep -q csistoragecapacities || kubectl patch clusterrole linstor-stork-scheduler --type json -p '[{"op": "add", "path": "/rules/-", "value":{"apiGroups":["storage.k8s.io"], "resources": ["csistoragecapacities", "csidrivers"], "verbs": ["get", "list", "watch"]}}]'
                         grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"#{linstor_cmd}\"' >> /etc/bash.bashrc
                         grep -q 'alias storkctl=' /etc/bash.bashrc || echo 'alias storkctl=\"#{stork_cmd}\"' >> /etc/bash.bashrc
                         #{linstor_cmd} node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
