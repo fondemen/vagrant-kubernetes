@@ -48,18 +48,31 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
-docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
-containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else '1.4' end)
-
-compose = read_env 'COMPOSE_VERSION', false
-raise "Docker Compose requires Docker to be installed first" unless docker_version
-
 k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
 k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
+
+cri = (read_env 'CRI', if Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then 'containerd' else 'docker' end).downcase
+
+containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else 'latest' end)
+docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' elsif cri != 'docker' && Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then false else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
+docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
+
+case cri
+when 'docker'
+    raise "CRI defined as Docker while Docker is disabled" unless docker_version
+    cri_socket = '/var/run/dockershim.sock'
+when 'containerd'
+    raise "CRI defined as contained while containerd is disabled" unless containerd_version
+    cri_socket = '/run/containerd/containerd.sock'
+#when 'cri-o'
+#    raise "CRI defined as contained while containerd is disabled" unless crio_version
+#    cri_socket = '/var/run/crio/crio.sock'
+else
+    raise "Unknown CRI: #{cri} ; choose between containerd and docker"
+end
 
 box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
@@ -251,10 +264,10 @@ Vagrant.configure("2") do |config_all|
         "
     end if init
 
-    # Docker Installation
-    if docker_version
-        config_all.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
-            if ! which docker >/dev/null; then
+    # docker repos
+    if containerd_version || docker_version
+        config_all.vm.provision "DockerPackages", :type => "shell", :name => 'Configuring Docker repository', :inline => "
+            if ! apt-cache policy | grep -q docker; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
                 apt-get update
@@ -264,8 +277,50 @@ Vagrant.configure("2") do |config_all|
                 apt-key fingerprint #{docker_repo_fingerprint}
                 add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
                 apt-get update
+            fi
+        "
+    end
+
+    # containerd Installation
+    if containerd_version
+        config_all.vm.provision "ContainerdInstall", :type => "shell", :name => 'Installing containerd', :inline => "
+            [ -f /etc/modules-load.d/containerd.conf ] || touch /etc/modules-load.d/containerd.conf
+            grep -q overlay /etc/modules-load.d/containerd.conf || echo overlay >> /etc/modules-load.d/containerd.conf
+            grep -q br_netfilter /etc/modules-load.d/containerd.conf || echo br_netfilter >> /etc/modules-load.d/containerd.conf
+            modprobe overlay
+            modprobe br_netfilter
+            [ -f /etc/sysctl.d/99-kubernetes-cri.conf ] || touch /etc/sysctl.d/99-kubernetes-cri.conf
+            grep -q 'net.bridge.bridge-nf-call-iptables' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.bridge.bridge-nf-call-iptables=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
+            grep -q 'net.ipv4.ip_forward' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
+            grep -q 'net.bridge.bridge-nf-call-ip6tables' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.bridge.bridge-nf-call-ip6tables=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
+            [ $(sysctl -n net.bridge.bridge-nf-call-iptables) == 1 ] || sysctl --system
+            [ $(sysctl -n net.ipv4.ip_forward) == 1 ] || sysctl --system
+            [ $(sysctl -n net.bridge.bridge-nf-call-ip6tables) == 1 ] || sysctl --system
+            if ! which containerd >/dev/null; then
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
+                CONTAINERD_VERSION=#{if containerd_version == 'latest' then "*" else "$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')" end}
+                echo \"Installing containerd $CONTAINERD_VERSION\"
+                apt-get install --yes containerd.io=$CONTAINERD_VERSION
+                apt-mark hold containerd.io
+                containerd config default > /etc/containerd/config.toml
+                systemctl restart containerd
+            fi
+            if ! grep -q 'SystemdCgroup' /etc/containerd/config.toml; then
+                sed -i 's/^\\([[:blank:]]*\\)\\[plugins\\.\"io\\.containerd\\.grpc\\.v1\\.cri\"\\.containerd\\.runtimes\\.runc\\.options\\]/&\\n\\1  SystemdCgroup = true/' /etc/containerd/config.toml
+                systemctl restart containerd
+            fi
+            "
+    end
+
+    # Docker Installation
+    if docker_version
+        config_all.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
+            if ! which docker >/dev/null; then
+                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                export DEBIAN_FRONTEND=noninteractive
                 DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
-                CONTAINERD_VERSION=$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')
+                CONTAINERD_VERSION=#{if containerd_version == 'latest' then "*" else "$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')" end}
                 echo \"Installing Docker $DOCKER_VERSION\"
                 apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
                 apt-mark hold docker-ce docker-ce-cli containerd.io
@@ -292,8 +347,12 @@ EOF
 
     # Kubernetes installation
     if k8s_version
-        raise "Cannot install Kubernetes without Docker" unless docker_version
+        raise "Cannot install Kubernetes without Docker or containerd" unless docker_version || containerd_version
         config_all.vm.provision "K8SInstall", type: "shell", name: 'Installing Kubernetes', inline: "
+            grep -q 'net.bridge.bridge-nf-call-ip6tables' /etc/sysctl.d/k8s.conf || echo 'net.bridge.bridge-nf-call-ip6tables=1' >> /etc/sysctl.d/k8s.conf
+            grep -q 'net.bridge.bridge-nf-call-iptables' /etc/sysctl.d/k8s.conf || echo 'net.bridge.bridge-nf-call-iptables=1' >> /etc/sysctl.d/k8s.conf
+            [ $(sysctl -n net.bridge.bridge-nf-call-ip6tables) == 1 ] || sysctl --system
+            [ $(sysctl -n net.bridge.bridge-nf-call-iptables) == 1 ] || sysctl --system
             if ! which kubeadm >/dev/null; then
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
@@ -314,8 +373,11 @@ EOF
                 update-alternatives --set ebtables /usr/sbin/ebtables-legacy
                 apt-mark hold kubelet kubeadm kubectl
             fi
+            mkdir -p /etc/bash_completion.d
             [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
+            [ -f /etc/bash_completion.d/crictl ] || crictl --runtime-endpoint=unix://#{cri_socket} completion >/etc/bash_completion.d/crictl
             grep -q 'alias k=' /etc/bash.bashrc || echo 'alias k=kubectl' >> /etc/bash.bashrc
+            grep -q 'alias crictl=' /etc/bash.bashrc || echo \"alias crictl='sudo crictl --runtime-endpoint=unix://#{cri_socket}'\" >> /etc/bash.bashrc
             grep -q 'complete -F __start_kubectl k' /etc/bash.bashrc || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
             "
         config_all.vm.provision "K8SImages", type: "shell", name: 'Downloading Kubernetes images', inline: "
@@ -323,13 +385,13 @@ EOF
         " unless init
 
         config_all.vm.provision "K8SDashboardImages", type: "shell", name: 'Downloading Kubernetes Dashboard images', inline: "
-            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
+            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
         " unless init
     end
 
     config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
-        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
-        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl pull IMG
+        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
+        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
     " if calico_version && !init
 
     # Gluster installation
@@ -376,12 +438,13 @@ EOF
             curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
             mv linux-amd64/helm /usr/local/bin && \\
             rm -rf linux-amd64 && \\
+            mkdir -p /etc/bash_completion.d && \\
             ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
         )
     " if helm_version && !init
 
     config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-        crictl pull traefik:#{traefik_version}
+        crictl --runtime-endpoint=unix://#{cri_socket} pull traefik:#{traefik_version}
     " if traefik_version && !init
         
     (1..nodes).each do |node_number|
@@ -432,16 +495,6 @@ EOF
                 ssh -o StrictHostKeyChecking=no #{root_hostname} 'ssh-keyscan #{hostname} >> /root/.ssh/known_hosts'
             "
 
-            if compose && master
-                    config_all.vm.provision "DockerComposeInstall", :type => "shell", :name => 'Installing Docker Compose', :inline => "
-                    if [ ! -x /usr/local/bin/docker-compose ]; then
-                        curl -s -L \"https://github.com/docker/compose/releases/download/#{compose}/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose
-                        chmod +x /usr/local/bin/docker-compose
-                        curl -s -L https://raw.githubusercontent.com/docker/compose/#{compose}/contrib/completion/bash/docker-compose -o /etc/bash_completion.d/docker-compose
-                    fi
-                "
-            end # Compose
-
             if k8s_version
                 config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
                     grep -q 1 /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && sysctl -p /etc/sysctl.conf
@@ -457,7 +510,7 @@ EOF
                     cidr = if flannel then '10.244.0.0/16' elsif calico then '192.168.0.0/16' else raise "Undefined CNI provider (try using CIDR env var)" end
 
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --pod-network-cidr=#{cidr} #{if k8s_version.split('.').length > 2 then "--kubernetes-version #{k8s_version}" else '' end} | tee /root/k8sjoin.txt; fi
+                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --cri-socket=#{cri_socket} --pod-network-cidr=#{cidr} #{if k8s_version.split('.').length > 2 then "--kubernetes-version #{k8s_version}" else '' end} | tee /root/k8sjoin.txt; fi
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
                         "
@@ -703,6 +756,7 @@ EOF
                         curl -fsSL https://get.helm.sh/helm-v#{helm_version}-linux-amd64.tar.gz | tar xz && \\
                         mv linux-amd64/helm /usr/local/bin && \\
                         rm -rf linux-amd64 && \\
+                        mkdir -p /etc/bash_completion.d && \\
                         ( [ -f /etc/bash_completion.d/helm ] || /usr/local/bin/helm completion bash > /etc/bash_completion.d/helm || curl -Lsf https://raw.githubusercontent.com/helm/helm/v#{helm_version}/scripts/completions.bash > /etc/bash_completion.d/helm )
                     )
                 "
