@@ -1,18 +1,29 @@
 export BOX='bento/debian-10'
-export UPGRADE=true
-export GUEST_ADDITIONS=true
-export INIT=false
+export NODES=2
 vagrant box update
 vagrant up
-rm k8s.box
-vagrant package --output k8s.box
-vagrant box remove k8s
-vagrant box add k8s k8s.box
+# check dashboard and wait for stabilization
+BACKUP=1 vagrant provision --provision-with ImageBackup
+vagrant scp k3s01:/var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar .
+export UPGRADE=true
+export GUEST_ADDITIONS=true
+vagrant destroy -f
+export INIT=0
+vagrant up
+vagrant scp k3s-airgap-images-amd64.tar k3s-airgap-images-amd64.tar 
+vagrant ssh
+ sudo mv -f k3s-airgap-images-amd64.tar /var/lib/rancher/k3s/agent/images/
+ exit
+rm k3s.box
+vagrant package --output k3s.box
+vagrant box remove k3s
+vagrant box add k3s k3s.box
 
 #### Testing ####
 vagrant destroy -f default
 unset UPGRADE
 unset GUEST_ADDITIONS
+unset NODES
 unset INIT
-export BOX=k8s
+export BOX=k3s
 vagrant up

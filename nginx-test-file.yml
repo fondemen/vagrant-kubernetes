@@ -2,11 +2,11 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-gluster-pvc
+  name: test-pvc
 spec:
-  storageClassName: glusterfs
+  storageClassName: longhorn
   accessModes:
-    - ReadOnlyMany
+    - ReadWriteMany # ReadOnlyMany not supported
   resources:
     requests:
       storage: 5Gi
@@ -30,7 +30,7 @@ spec:
       volumes:
       - name: www
         persistentVolumeClaim:
-          claimName: test-gluster-pvc
+          claimName: test-pvc
       containers:
       - image: nginx
         name: nginx

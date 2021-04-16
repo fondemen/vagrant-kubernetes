@@ -39,8 +39,8 @@ if not plugins_to_install.empty?
   end
 end
 
-memory = read_env 'MEM', '2048'
-master_memory = read_env 'MASTER_MEM', '2048'
+memory = read_env 'MEM', '1024'
+master_memory = read_env 'MASTER_MEM', '1536'
 cpus = read_env 'CPU', '1'
 master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for master
 nodes = (read_env 'NODES', 3).to_i
@@ -48,41 +48,27 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
-k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
-k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
-k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
-k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
-
-cri = (read_env 'CRI', if Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then 'containerd' else 'docker' end).downcase
-
-containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else 'latest' end)
-docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' elsif cri != 'docker' && Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then false else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
-docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
-
-case cri
-when 'docker'
-    raise "CRI defined as Docker while Docker is disabled" unless docker_version
-    cri_socket = '/var/run/dockershim.sock'
-when 'containerd'
-    raise "CRI defined as contained while containerd is disabled" unless containerd_version
-    cri_socket = '/run/containerd/containerd.sock'
-#when 'cri-o'
-#    raise "CRI defined as contained while containerd is disabled" unless crio_version
-#    cri_socket = '/var/run/crio/crio.sock'
-else
-    raise "Unknown CRI: #{cri} ; choose between containerd and docker"
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5+k3s1' else '1.20' end)
+if (k8s_version) then
+    k8s_short_version = if k8s_version == 'latest' then 'latest' else k8s_version.split('.').slice(0,2).join('.') end
+    k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
+    k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
+    k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 end
 
-box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
-box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
+box = read_env 'BOX', if k8s_short_version != 'latest' && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.20'), Gem::Version.new('1.20')) then 'fondement/k3s' else 'bento/debian-10' end # must be debian-based
+box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k3s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
 vagrant_group = read_env 'VAGRANT_GUEST_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
-cni = (read_env 'CNI', 'calico').downcase
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18' else 'latest' end)
+calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/archive/v#{calico_version}/manifests/calico.yaml" end else nil end
+calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
+
+cni = (read_env 'CNI', if calico_version then 'calico' else 'flannel' end).downcase
 calico = false
 flannel = false
 case cni
@@ -93,46 +79,24 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end if k8s_version
-calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18' else 'latest' end) if calico
-calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/archive/v#{calico_version}/manifests/calico.yaml" end else nil end
-calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
-if read_bool_env 'GLUSTER', true
-    raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
-
-    gluster_version = read_env 'GLUSTER_VERSION', '7'
-    gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
-    # Directory root for additional vdisks for Gluster
-    if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
-      vboxmanage_path = "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe"
-    else
-      vboxmanage_path = "VBoxManage" # Assume it's in the path
-    end
-    vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub(/^[^:]+:/, '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
-
-    heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
-    raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
-    heketi_admin_secret = read_env 'HEKETI_ADMIN', "My Secret"
-    heketi_secret = read_env 'HEKETI_PASSWORD', "My Secret"
-
-    gluster_replicas = read_env 'GLUSTER_REPLICAS', '2'
-else
-    gluster_version = false
-    heketi_version = false
-end
+longhorn_version = read_env 'LONGHORN_VERSION', (if own_image then '1.1.0' else 'latest' end)
+longhorn_db_port = (read_env 'LONGHORN_DB_PORT', '8002').to_i
+longhorn_replicas = (read_env 'LONGHORN_REPLICAS', [1, [nodes-1, 3].min].max).to_i
 
 traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
 helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.3' else false end) # check https://github.com/helm/helm/releases
-raise "Helm is supported as from version 3" if Gem::Version.new(helm_version) < Gem::Version.new('3')
+raise "Helm is supported as from version 3" if helm_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
+raise "Longhorn requires Helm to be installed" if longhorn_version && !helm_version
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
 
 host_itf = read_env 'ITF', false
 
 leader_ip = (read_env 'MASTER_IP', "192.168.11.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
-hostname_prefix = read_env 'PREFIX', 'k8s'
+hostname_prefix = read_env 'PREFIX', 'k3s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
 
@@ -206,7 +170,7 @@ wQ9BHtc5YfU7ePa+1XuXDfd1wDgF3lxETMcIpjKDODS7hRfFD0b/q3Hv9zWzaug4C70+pU
 JMSNVvJ7sbXxrW2nAAAADnZhZ3JhbnRAazhzLTAxAQIDBA==
 -----END OPENSSH PRIVATE KEY-----'
 
-control_plane_label = if Gem::Version.new(helm_version) >= Gem::Version.new('1.20') then 'node-role.kubernetes.io/control-plane' else 'node-role.kubernetes.io/master' end
+control_plane_label = if helm_version && Gem::Version.new(helm_version) >= Gem::Version.new('1.20') then 'node-role.kubernetes.io/control-plane' else 'node-role.kubernetes.io/master' end
 
 Vagrant.configure("2") do |config_all|
     # always use Vagrants insecure key
@@ -214,7 +178,7 @@ Vagrant.configure("2") do |config_all|
     # forward ssh agent to easily ssh into the different machines
     config_all.ssh.forward_agent = true
     config_all.vm.box = box
-    config_all.vm.box_version = "0.#{k8s_short_version}" if box == 'fondement/k8s' && k8s_short_version
+    config_all.vm.box_version = "0.#{k8s_short_version}" if box == 'fondement/k3s' && k8s_short_version
     begin config_all.vm.box_url = box_url if box_url rescue nil end
 
     config_all.vm.synced_folder ".", "/vagrant", disabled: true
@@ -264,172 +228,21 @@ Vagrant.configure("2") do |config_all|
         "
     end if init
 
-    # docker repos
-    if containerd_version || docker_version
-        config_all.vm.provision "DockerPackages", :type => "shell", :name => 'Configuring Docker repository', :inline => "
-            if ! apt-cache policy | grep -q docker; then
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                apt-get update
-                apt-get install --yes apt-transport-https ca-certificates curl gnupg2 software-properties-common
-                DIST=$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')
-                curl -fsSL https://download.docker.com/linux/$DIST/gpg | apt-key add -
-                apt-key fingerprint #{docker_repo_fingerprint}
-                add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
-                apt-get update
-            fi
-        "
-    end
-
-    # containerd Installation
-    if containerd_version
-        config_all.vm.provision "ContainerdInstall", :type => "shell", :name => 'Installing containerd', :inline => "
-            [ -f /etc/modules-load.d/containerd.conf ] || touch /etc/modules-load.d/containerd.conf
-            grep -q overlay /etc/modules-load.d/containerd.conf || echo overlay >> /etc/modules-load.d/containerd.conf
-            grep -q br_netfilter /etc/modules-load.d/containerd.conf || echo br_netfilter >> /etc/modules-load.d/containerd.conf
-            modprobe overlay
-            modprobe br_netfilter
-            [ -f /etc/sysctl.d/99-kubernetes-cri.conf ] || touch /etc/sysctl.d/99-kubernetes-cri.conf
-            grep -q 'net.bridge.bridge-nf-call-iptables' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.bridge.bridge-nf-call-iptables=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
-            grep -q 'net.ipv4.ip_forward' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
-            grep -q 'net.bridge.bridge-nf-call-ip6tables' /etc/sysctl.d/99-kubernetes-cri.conf || echo 'net.bridge.bridge-nf-call-ip6tables=1' >> /etc/sysctl.d/99-kubernetes-cri.conf
-            [ $(sysctl -n net.bridge.bridge-nf-call-iptables) == 1 ] || sysctl --system
-            [ $(sysctl -n net.ipv4.ip_forward) == 1 ] || sysctl --system
-            [ $(sysctl -n net.bridge.bridge-nf-call-ip6tables) == 1 ] || sysctl --system
-            if ! which containerd >/dev/null; then
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                CONTAINERD_VERSION=#{if containerd_version == 'latest' then "*" else "$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')" end}
-                echo \"Installing containerd $CONTAINERD_VERSION\"
-                apt-get install --yes containerd.io=$CONTAINERD_VERSION
-                apt-mark hold containerd.io
-                containerd config default > /etc/containerd/config.toml
-                systemctl restart containerd
-            fi
-            if ! grep -q 'SystemdCgroup' /etc/containerd/config.toml; then
-                sed -i 's/^\\([[:blank:]]*\\)\\[plugins\\.\"io\\.containerd\\.grpc\\.v1\\.cri\"\\.containerd\\.runtimes\\.runc\\.options\\]/&\\n\\1  SystemdCgroup = true/' /etc/containerd/config.toml
-                systemctl restart containerd
-            fi
-            "
-    end
-
-    # Docker Installation
-    if docker_version
-        config_all.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
-            if ! which docker >/dev/null; then
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
-                CONTAINERD_VERSION=#{if containerd_version == 'latest' then "*" else "$(apt-cache madison containerd.io | grep '#{containerd_version}' | head -1 | awk '{print $3}')" end}
-                echo \"Installing Docker $DOCKER_VERSION\"
-                apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION containerd.io=$CONTAINERD_VERSION
-                apt-mark hold docker-ce docker-ce-cli containerd.io
-            fi
-            if [ ! -f /etc/docker/daemon.json ]; then
-                cat > /etc/docker/daemon.json <<EOF
-{
-    \"exec-opts\": [\"native.cgroupdriver=systemd\"],
-    \"log-driver\": \"json-file\",
-    \"log-opts\": {
-        \"max-size\": \"100m\"
-    },
-    \"storage-driver\": \"overlay2\"
-}
-EOF
-                mkdir -p /etc/systemd/system/docker.service.d
-                systemctl daemon-reload
-                systemctl restart docker
-                echo \"Docker daemon restarted\"
-            fi
-            usermod -aG docker vagrant
-            "
-    end
-
     # Kubernetes installation
     if k8s_version
-        raise "Cannot install Kubernetes without Docker or containerd" unless docker_version || containerd_version
-        config_all.vm.provision "K8SInstall", type: "shell", name: 'Installing Kubernetes', inline: "
-            grep -q 'net.bridge.bridge-nf-call-ip6tables' /etc/sysctl.d/k8s.conf || echo 'net.bridge.bridge-nf-call-ip6tables=1' >> /etc/sysctl.d/k8s.conf
-            grep -q 'net.bridge.bridge-nf-call-iptables' /etc/sysctl.d/k8s.conf || echo 'net.bridge.bridge-nf-call-iptables=1' >> /etc/sysctl.d/k8s.conf
-            [ $(sysctl -n net.bridge.bridge-nf-call-ip6tables) == 1 ] || sysctl --system
-            [ $(sysctl -n net.bridge.bridge-nf-call-iptables) == 1 ] || sysctl --system
-            if ! which kubeadm >/dev/null; then
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                swapoff -a;sed -i '/swap/d' /etc/fstab
-                update-alternatives --set iptables /usr/sbin/iptables-legacy
-                update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
-                update-alternatives --set arptables /usr/sbin/arptables-legacy
-                update-alternatives --set ebtables /usr/sbin/ebtables-legacy
-                curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-                echo 'deb https://apt.kubernetes.io/ kubernetes-xenial main' >/etc/apt/sources.list.d/kubernetes.list
-                apt-get update
-                K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}')
-                apt-get install --yes ebtables ethtool kubelet=$K8S_VERSION kubeadm=$K8S_VERSION kubectl=$K8S_VERSION
-                echo \"Installing Kubernetes $K8S_VERSION\"
-                update-alternatives --set iptables /usr/sbin/iptables-legacy
-                update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
-                update-alternatives --set arptables /usr/sbin/arptables-legacy
-                update-alternatives --set ebtables /usr/sbin/ebtables-legacy
-                apt-mark hold kubelet kubeadm kubectl
+        config_all.vm.provision "K3SDownload", type: "shell", name: "Downloading K3S Kubernetes #{k8s_version}", inline: "
+            if ! which k3s >/dev/null 2>&1; then
+                mkdir -p install
+                #{if k8s_version != 'latest' then "export INSTALL_K3S_VERSION=v#{k8s_version}" end}
+                [ -f ./install/k3s.sh ] || curl -sfL https://get.k3s.io >./install/k3s.sh
+                mkdir -p /var/lib/rancher/k3s/agent/images/
+                cd /var/lib/rancher/k3s/agent/images/
+                K3S_VERSION=#{if k8s_version != 'latest' then "v#{k8s_version}" else "$(wget -SqO /dev/null https://update.k3s.io/v1-release/channels/stable  2>&1 | grep -i Location: | sed -e 's|.*/||' | sed 's|+|%2B|g')" end}
+                #{if init then "[ -f k3s-airgap-images-amd64.tar ] || (wget -q https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION/k3s-airgap-images-amd64.tar && echo \"K3s $K3S_VERSION images downloaded\")" end}
+                [ -f /usr/local/bin/k3s ] || (wget -qO /usr/local/bin/k3s https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION/k3s && echo \"K3s $K3S_VERSION downloaded\")
+                chmod 755 /usr/local/bin/k3s
             fi
-            mkdir -p /etc/bash_completion.d
-            [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
-            [ -f /etc/bash_completion.d/crictl ] || crictl --runtime-endpoint=unix://#{cri_socket} completion >/etc/bash_completion.d/crictl
-            grep -q 'alias k=' /etc/bash.bashrc || echo 'alias k=kubectl' >> /etc/bash.bashrc
-            grep -q 'alias crictl=' /etc/bash.bashrc || echo \"alias crictl='sudo crictl --runtime-endpoint=unix://#{cri_socket}'\" >> /etc/bash.bashrc
-            grep -q 'complete -F __start_kubectl k' /etc/bash.bashrc || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
-            "
-        config_all.vm.provision "K8SImages", type: "shell", name: 'Downloading Kubernetes images', inline: "
-            kubeadm config images pull
-        " unless init
-
-        config_all.vm.provision "K8SDashboardImages", type: "shell", name: 'Downloading Kubernetes Dashboard images', inline: "
-            curl -sL #{k8s_db_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
-        " unless init
-    end
-
-    config_all.vm.provision "CalicoDownload", type: "shell", name: "Downloading Calico #{calico_version} binaries", inline: "
-        curl -sL #{calico_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
-        curl -sL #{calicoctl_url} | grep 'image:' | sed 's/image://' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
-    " if calico_version && !init
-
-    # Gluster installation
-    if gluster_version
-        config_all.vm.provision "GlusterInstall", type: "shell", name: 'Installing GlusterFS', inline: "
-            if ! which gluster >/dev/null; then
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                curl -s https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/rsa.pub | apt-key add -
-                DEBID=$(grep 'VERSION_ID=' /etc/os-release | cut -d '=' -f 2 | tr -d '\"')
-                DEBVER=$(grep 'VERSION=' /etc/os-release | grep -Eo '[a-z]+')
-                DEBARCH=$(dpkg --print-architecture)
-                echo \"deb https://download.gluster.org/pub/gluster/glusterfs/#{gluster_version}/LATEST/Debian/${DEBID}/${DEBARCH}/apt ${DEBVER} main\" > /etc/apt/sources.list.d/gluster.list
-                apt-get update
-                apt-get install --yes glusterfs-server glusterfs-client xfsprogs
-            fi
-            systemctl start glusterd
-            systemctl enable glusterd
         "
-
-        # Heketi installation
-        if k8s_version && heketi_version
-            config_all.vm.provision "HeketiUser", type: "shell", name: 'Authorizing Heketi', inline: "
-                useradd -m heketi
-                grep -q 'Defaults:heketi !requiretty' /etc/sudoers || echo 'Defaults:heketi !requiretty' >> /etc/sudoers
-                grep -q 'heketi ALL=' /etc/sudoers || echo 'heketi ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers
-            "
-            config_all.vm.provision "HeketiBinaries", type: "shell", name: 'Downloading Heketi binaries', inline: "
-                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                export DEBIAN_FRONTEND=noninteractive
-                if [ ! -x /usr/local/bin/heketi-cli ]; then
-                    apt-get install --yes lvm2
-                    echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
-                    mv ./heketi/heketi /usr/local/bin/
-                    mv ./heketi/heketi-cli /usr/local/bin/
-                fi
-            " unless init
-        end
     end
 
     config_all.vm.provision "HelmDownload", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
@@ -443,9 +256,11 @@ EOF
         )
     " if helm_version && !init
 
-    config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
-        crictl --runtime-endpoint=unix://#{cri_socket} pull traefik:#{traefik_version}
-    " if traefik_version && !init
+    config_all.vm.provision "LonghornDependencies", type: "shell", name: "Downloading Longhorn dependencies", inline: "
+        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+        export DEBIAN_FRONTEND=noninteractive
+        dpkg -l | grep -q open-iscsi && dpkg -l | grep -q nfs-common || (apt-get update && apt-get install -y open-iscsi nfs-common)
+    " if longhorn_version
         
     (1..nodes).each do |node_number|
         definition = definitions[node_number-1]
@@ -496,51 +311,56 @@ EOF
             "
 
             if k8s_version
-                config.vm.provision "K8SNodeIP", type: "shell", name: 'Setting up Kubernetes node IP', inline: "
-                    grep -q 1 /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || echo 'net.bridge.bridge-nf-call-iptables = 1' >> /etc/sysctl.conf && sysctl -p /etc/sysctl.conf
-                    if [ ! -f /etc/default/kubelet ]; then
-                        echo \'KUBELET_EXTRA_ARGS=\"--node-ip=#{ip} --cni-bin-dir=/opt/cni/bin,/usr/libexec/cni\"' > /etc/default/kubelet;
-                        systemctl daemon-reload
-                        systemctl restart kubelet
-                    fi
-                    "
 
                 if master
                     # Initializing K8s
-                    cidr = if flannel then '10.244.0.0/16' elsif calico then '192.168.0.0/16' else raise "Undefined CNI provider (try using CIDR env var)" end
-
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
-                        if [ ! -f /etc/kubernetes/admin.conf ]; then echo 'Initializing Kubernetes' ; kubeadm init --apiserver-advertise-address=#{root_ip} --cri-socket=#{cri_socket} --pod-network-cidr=#{cidr} #{if k8s_version.split('.').length > 2 then "--kubernetes-version #{k8s_version}" else '' end} | tee /root/k8sjoin.txt; fi
-                        if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/kubernetes/admin.conf $HOME/.kube/config ; fi
-                        if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/kubernetes/admin.conf #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
-                        "
-                    if flannel
-                        config.vm.provision "Flannel", type: "shell", name: 'Setting up Flannel CNI', inline: "
-                            kubectl get pods --namespace kube-system 2>/dev/null | grep -q flannel || curl -s https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml | sed '/kube-subnet-mgr/a\\ \\ \\ \\ \\ \\ \\ \\ - --iface=#{internal_itf}' | tee flannel.yml | kubectl apply -f -
-                        "
-                    elsif calico
-                        config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
-                            kubectl -n kube-system get daemonsets | grep calico 2>/dev/null | grep -q calico || kubectl apply -f #{calico_url}
-                        "
-                        config.vm.provision "CalicoCtl", type: "shell", name: 'Setting up calicoctl', inline: "
-                            kubectl -n kube-system get pod calicoctl >/dev/null 2>/dev/null || kubectl apply -f #{calicoctl_url}
-                            grep -q 'alias calicoctl=' /etc/bash.bashrc || echo 'alias calicoctl=\"kubectl exec -ti -n kube-system calicoctl -- /calicoctl\"' >> /etc/bash.bashrc
-                        "
-                    end 
-
-                    if nodes < 3
-                        config.vm.provision "AllowPodOnMaster", type: "shell", name: 'Allowing pods to be scheduled on master node', inline: "
-                            kubectl get nodes #{root_hostname} -o jsonpath='{.spec.taints}' | grep -q NoSchedule && kubectl taint node #{root_hostname} node-role.kubernetes.io/master:NoSchedule- || /bin/true
-                        "
-                    end
+                        export INSTALL_K3S_SKIP_DOWNLOAD=true
+                        #{if k8s_version != 'latest' then "INSTALL_K3S_VERSION=\"v#{k8s_version}\"" end}
+                        #{if calico then "export INSTALL_K3S_EXEC=\"--flannel-backend=none --disable-network-policy --cluster-cidr=192.168.0.0/16\"" end}
+                        sh ./install/k3s.sh --node-ip #{ip} --advertise-address #{ip} --no-deploy=traefik --no-deploy=servicelb --no-deploy=local-storage --write-kubeconfig-mode=640 #{if flannel then "--flannel-iface '#{internal_itf}'" end}
+                        systemctl enable --now k3s
+                        if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/rancher/k3s/k3s.yaml $HOME/.kube/config ; fi
+                        if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/rancher/k3s/k3s.yaml #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
+                    "
 
                 else
                     # Joining K8s
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the Kubernetes cluster', inline: "
-                        [ -d ~/.kube ] || scp -o StrictHostKeyChecking=no -r #{root_hostname}:~/.kube .
-                        [ -f /etc/kubernetes/kubelet.conf ] || kubeadm join --discovery-file .kube/config
+                        ssh -o StrictHostKeyChecking=no #{root_hostname} kubectl get nodes #{hostname} 2>/dev/null || [ -x /usr/local/bin/k3s-uninstall.sh ] && /usr/local/bin/k3s-uninstall.sh
+                        export K3S_NODE_NAME=#{hostname}
+                        export INSTALL_K3S_SKIP_DOWNLOAD=true
+                        export K3S_URL=https://#{root_hostname}:6443
+                        export K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no #{root_hostname} cat /var/lib/rancher/k3s/server/node-token)
+                        sh ./install/k3s.sh --node-ip #{ip}
+                        systemctl enable --now k3s-agent
                     "
                 end
+                
+                config.vm.provision "K3SReady", type: "shell", name: 'Waiting for Kubernetes node to be ready', inline: "
+                    until ssh -o StrictHostKeyChecking=no #{root_hostname} kubectl get nodes #{hostname} 2>/dev/null | grep -iq Ready; do sleep 3; done;
+                "
+
+                config.vm.provision "K8SCmds", type: "shell", name: 'Configuring tools', inline: "
+                    until which kubectl >/dev/null 2>&1; do sleep 1; done
+                    mkdir -p /etc/bash_completion.d
+                    [ -f /etc/bash_completion.d/kubectl ] || kubectl completion bash >/etc/bash_completion.d/kubectl
+                    [ -f /etc/bash_completion.d/crictl ] || crictl completion >/etc/bash_completion.d/crictl
+                    grep -q 'alias k=' /etc/bash.bashrc || echo 'alias k=kubectl' >> /etc/bash.bashrc
+                    grep -q 'complete -F __start_kubectl k' /etc/bash.bashrc || echo 'complete -F __start_kubectl k' >> /etc/bash.bashrc
+
+                    grep -q 'alias crictl=' #{vagrant_home}/.bashrc || echo 'alias crictl=\"sudo crictl\"' >> #{vagrant_home}/.bashrc
+
+                    # chmod -R g:+r /etc/rancher/k3s
+                    groups #{vagrant_user} | grep -q root || usermod -aG root #{vagrant_user}
+
+                    [ -f /etc/profile.d/k3s_env.sh ] && grep -q KUBECONFIG /etc/profile.d/k3s_env.sh || echo \"export KUBECONFIG=/etc/rancher/k3s/k3s.yaml\" >> /etc/profile.d/k3s_env.sh
+                    chmod +x /etc/profile.d/k3s_env.sh
+                "
+                    
+                config.vm.provision "Calico", type: "shell", name: 'Setting up Calico CNI', inline: "
+                    kubectl -n kube-system get daemonsets | grep calico 2>/dev/null | grep -q calico || kubectl apply -f #{calico_url}
+                " if calico_version && master
 
                 if master && k8s_db_version && k8s_db_port && k8s_db_port > 0
                     config.vm.provision "K8SDashboard", type: "shell", name: 'Installing the Kubernetes dashboard', inline: "
@@ -565,190 +385,6 @@ subjects:
                 end
             end # k8s
 
-            if gluster_version
-                # Additional disk for GlusterFS storage
-                config.vm.provider :virtualbox do |vb|
-                    vb.name = hostname
-                    gluster_disk_file = File.join(vdisk_root, hostname, "gluster-#{hostname}.vdi")
-                    unless File.exist?(gluster_disk_file)
-                        vb.customize ['createhd', '--filename', gluster_disk_file, '--format', 'VDI', '--size', gluster_size * 1024]
-                    end
-                    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', 0, '--type', 'hdd', '--medium', gluster_disk_file]
-                end
-                config.vm.provision "GlusterPartition", type: "shell", name: 'Creating an XFS partition for Gluster', inline: "
-                    [ -e /dev/sdb1 ] || cat <<EOF | fdisk /dev/sdb
-n
-p
-1
-
-
-w
-EOF
-                    #file -sL /dev/sdb1 | grep -q XFS || mkfs.xfs /dev/sdb1
-                    #grep -q '/dev/sdb1' /etc/fstab || echo '/dev/sdb1 /export/sdb1 xfs defaults 0 0' >> /etc/fstab
-                    #mkdir -p /export/sdb1 && mount -a && mkdir -p /export/sdb1/brick
-                "
-
-                unless master
-                    # Joining Gluster
-                    config.vm.provision "GlusterJoin", type: "shell", name: 'Joining the Gluster cluster', inline: "
-                        ssh -o StrictHostKeyChecking=no #{root_hostname} 'gluster pool list' | grep -q #{hostname} || ssh #{root_hostname} 'gluster peer probe #{hostname}'
-                    "
-                end
-
-                if k8s_version && heketi_version
-                    if master
-                        # Installing Heketi on master
-                        config.vm.provision "HeketiSSHKeys", type: "shell", name: 'Creating Heketi SSH keys', inline: "
-                            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
-                            export DEBIAN_FRONTEND=noninteractive
-                            if [ ! -x /usr/local/bin/heketi-cli ]; then
-                                apt-get install --yes lvm2
-                                echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
-                                mv ./heketi/heketi /usr/local/bin/
-                                mv ./heketi/heketi-cli /usr/local/bin/
-                            fi
-                            if [ ! -f /home/heketi/.ssh/id_rsa ]; then
-                                sudo -u heketi ssh-keygen -t rsa -b 4096 -m PEM -f /home/heketi/.ssh/id_rsa -q -N \"\"
-                                sed -i 's/#{hostname}/#{ip}/' /home/heketi/.ssh/id_rsa.pub
-                            fi
-                        "
-                        config.vm.provision "HeketiInstall", type: "shell", name: 'Installing Heketi', inline: <<-EOF
-                            mkdir -p /etc/heketi
-                            mkdir -p /var/lib/heketi
-                            chown -R heketi:heketi /var/lib/heketi
-                            [ -f /etc/heketi/heketi.json ] || cat > /etc/heketi/heketi.json <<EOL
-{
-    "_port_comment": "Heketi Server Port Number",
-    "port" : "8080",
-
-    "_use_auth": "Enable JWT authorization. Please enable for deployment",
-    "use_auth" : false,
-
-    "_jwt" : "Private keys for access",
-    "jwt" : {
-        "_admin" : "Admin has access to all APIs",
-        "admin" : {
-            "key" : "#{heketi_admin_secret}"
-        },
-        "_user" : "User only has access to /volumes endpoint",
-        "user" : {
-            "key" : "#{heketi_secret}"
-        }
-    },
-
-    "_glusterfs_comment": "GlusterFS Configuration",
-    "glusterfs" : {
-
-        "_executor_comment": "Execute plugin. Possible choices: mock, ssh",
-        "executor" : "ssh",
-
-        "_db_comment": "Database file name",
-        "db" : "/var/lib/heketi/heketi.db",
-
-        "_sshexec_comment": "SSH username and private key file information",
-        "sshexec": {
-            "keyfile": "/home/heketi/.ssh/id_rsa",
-            "user": "heketi",
-            "sudo": true,
-            "port": "22",
-            "fstab": "/etc/fstab",
-            "backup_lvm_metadata": false,
-            "debug_umount_failures": true
-        },
-        
-        "_db_comment": "Database file name",
-        "db": "/var/lib/heketi/heketi.db"
-    }
-}
-EOL
-                            [ -f /etc/systemd/system/heketi.service ] || cat > /etc/systemd/system/heketi.service <<EOL
-[Unit]
-Description=Heketi REST API Service
-Documentation=
-After=network.target
-
-[Service]
-User=heketi
-Group=heketi
-UMask=077
-ExecStart=/usr/local/bin/heketi --config=/etc/heketi/heketi.json
-Restart=on-failure
-
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=heketi
-
-[Install]
-WantedBy=multi-user.target
-EOL
-                            if [ ! -f /etc/rsyslog.d/heketi.conf ]; then
-                                cat > /etc/rsyslog.d/heketi.conf <<EOL
-if \\$programname == 'heketi' then /var/log/heketi.log
-& stop
-EOL
-                                systemctl restart rsyslog
-                            fi
-                            systemctl enable heketi
-                            systemctl start heketi
-                            CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
-                            [ -n "$CLUSTER_ID" ] || heketi-cli cluster create || ( sleep 10 &&  heketi-cli cluster create )
-EOF
-                    end
-
-                    config.vm.provision "HeketiAddNode", :type => "shell", :name => "Adding #{hostname} to Heketi", :inline => "
-                        sudo -u heketi mkdir -p /home/heketi/.ssh/
-                        sudo -u heketi touch /home/heketi/.ssh/authorized_keys
-                        chmod 600 /home/heketi/.ssh/authorized_keys
-                        grep -q 'heketi@#{root_ip}' /home/heketi/.ssh/authorized_keys || ssh -o StrictHostKeyChecking=no #{root_hostname} 'cat /home/heketi/.ssh/id_rsa.pub 2>/dev/null' >> /home/heketi/.ssh/authorized_keys
-                        ssh root@#{root_hostname} sudo -u heketi ssh -o StrictHostKeyChecking=no #{ip} /bin/true
-                        CLUSTER_ID=$(ssh root@#{root_hostname} heketi-cli cluster list | tail -n 1 | cut -d: -f2 | cut -d ' ' -f 1)
-                        NODES=$(ssh root@#{root_hostname} heketi-cli node list | grep $CLUSTER_ID | awk '{print $1;}' | cut -d : -f 2)
-                        NODE_ID=$(for NODE in $NODES ; do INFO=$(ssh root@#{root_hostname} heketi-cli node info $NODE); echo $INFO | grep -q #{ip} && echo $NODE; done)
-                        [ -n \"$NODE_ID\" ] || ssh root@#{root_hostname} heketi-cli node list | grep -q #{ip} || ssh root@#{root_hostname} heketi-cli node add --zone=1 --cluster=$CLUSTER_ID --management-host-name=#{ip} --storage-host-name=#{ip}
-                        until [ -n \"$NODE_ID\" ]; do NODES=$(ssh root@#{root_hostname} heketi-cli node list | grep $CLUSTER_ID | awk '{print $1;}' | cut -d : -f 2); NODE_ID=$(for NODE in $NODES ; do INFO=$(ssh root@#{root_hostname} heketi-cli node info $NODE); echo $INFO | grep -q #{ip} && echo $NODE; done); done
-                        DEVICE_ID=$(ssh root@#{root_hostname} heketi-cli node info $NODE_ID | sed -n '/Devices:/,$p' | grep 'Id:' | awk '{print $1;}' | cut -d : -f 2)
-                        [ -n \"$DEVICE_ID\" ] || ssh root@#{root_hostname} heketi-cli device add --name=/dev/sdb1 --node=$NODE_ID
-                    "
-
-                    if master
-                        config.vm.provision "HeketiForK8s", :type => "shell", :name => "Setting-up Heketi for Kubernetes", :inline => <<-EOF
-                            kubectl get storageclasses.storage.k8s.io 2>/dev/null | grep -q glusterfs || CLUSTER_ID=$(heketi-cli cluster list | grep '^Id:' | head -n 1 | cut -d: -f2 | cut -d ' ' -f 1) echo "---
-apiVersion: v1
-kind: Namespace
-metadata:
-    name: heketi
----
-apiVersion: v1
-kind: Secret
-metadata:
-    name: heketi-secret
-    namespace: heketi
-type: kubernetes.io/glusterfs
-data:
-    key: $(echo -n #{heketi_admin_secret} | base64)
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-    name: glusterfs
-    namespace: default
-    annotations:
-      storageclass.kubernetes.io/is-default-class: \\"true\\"
-provisioner: kubernetes.io/glusterfs
-parameters:
-    resturl: \\"http://#{root_ip}:8080\\"
-    clusterid: \\"$CLUSTER_ID\\"
-    restauthenabled: \\"true\\"
-    restuser: \\"admin\\"
-    secretNamespace: heketi
-    secretName: \\"heketi-secret\\"
-    volumetype: \\"replicate:#{gluster_replicas}\\"" | kubectl apply -f -
-EOF
-                    end
-                end # Heketi
-            end # Gluster
-
             if k8s_version && helm_version && master
                 config.vm.provision "HelmInstall", :type => "shell", :name => "Installing Helm #{helm_version}", :inline => "
                     which helm >/dev/null 2>&1 || (
@@ -762,11 +398,17 @@ EOF
                 "
             end # Helm
 
-
+            if k8s_version && helm_version && longhorn_version && master
+                config.vm.provision "LonghornInstall", :type => "shell", :name => "Installing Longhorn #{longhorn_version}", :inline => "
+                    helm repo list | grep -q longhorn || ( helm repo add longhorn https://charts.longhorn.io && helm repo update )
+                    kubectl get ns longhorn-system 2>/dev/null | grep -q longhorn-system 2>&1 || (kubectl create ns longhorn-system && helm -n longhorn-system install longhorn #{if longhorn_version != 'latest' then "--version #{longhorn_version}" end} longhorn/longhorn --set defaultSettings.defaultReplicaCount=\"#{longhorn_replicas}\" --set defaultSettings.defaultDataLocality=\"best-effort\")
+                "
+            end # longhorn
 
             if k8s_version && helm_version && traefik_version
                 if master
                     config.vm.provision "TraefikIngress", :type => "shell", :name => "Setting-up Traefik as an Ingress controller", :inline => <<-EOF
+                        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
                         helm repo list | grep -q traefik || ( helm repo add traefik https://helm.traefik.io/traefik && helm repo update )
                         kubectl get namespaces traefik > /dev/null 2>&1 || kubectl create namespace traefik
                         kubectl get ingressclasses.networking.k8s.io > /dev/null 2>&1 && ( kubectl get ingressclasses.networking.k8s.io traefik-lb >/dev/null 2>&1 || echo '
@@ -805,6 +447,10 @@ ports:
     expose: false
     port: #{k8s_db_port}
     hostPort: #{k8s_db_port}" end}
+  #{if longhorn_version && longhorn_db_port && longhorn_db_port > 0 then "longhorn:
+    expose: false
+    port: #{longhorn_db_port}
+    hostPort: #{longhorn_db_port}" end}
   websecure:
     expose: false
 
@@ -835,13 +481,14 @@ tolerations:
   operator: Equal
   effect: NoSchedule
 nodeSelector:
-  #{control_plane_label}: ""
+  #{control_plane_label}: "true"
 
 ingressRoute:
   dashboard:
     enabled: true' | helm install -n traefik traefik traefik/traefik -f -
 EOF
                     config.vm.provision "TraefikDashboard", :type => "shell", :name => "Exposing Traefik Dashboard on http://#{root_ip}:#{traefik_db_port}/", :inline => <<-EOF
+                        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
                         kubectl -n traefik get ingressroute dashboard >/dev/null 2>&1 || echo '---
 apiVersion: traefik.containo.us/v1alpha1
 kind: IngressRoute
@@ -901,8 +548,49 @@ EOF
 
                         config.vm.network "forwarded_port", guest: k8s_db_port, host: k8s_db_port if expose_db_ports
                     end # K8S Dashboard over traefik
+
+
+                    if longhorn_version && longhorn_db_port && longhorn_db_port > 0
+                        config.vm.provision "LonghornDashboard", :type => "shell", :name => "Exposing Longhorn Dashboard on http://#{root_ip}:#{longhorn_db_port}/", :inline => <<-EOF
+                          kubectl -n longhorn-system get ingressroute dashboard >/dev/null 2>&1 || (
+                            echo "
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dashboard
+  namespace: longhorn-system
+spec:
+  entryPoints:
+    - longhorn
+  routes:
+    - match: HostRegexp(\\`{host:.+}\\`)
+      kind: Rule
+      services:
+        - name: longhorn-frontend
+          namespace: longhorn-system
+          kind: Service
+          port: 80
+" | kubectl apply -f -
+                          )
+EOF
+
+                        config.vm.network "forwarded_port", guest: longhorn_db_port, host: traefik_db_port if expose_db_ports
+                    end # Longhorn Dashboard over traefik
                 end
             end # Traefik
+
+            
+
+            if read_bool_env 'BACKUP' && master
+                config.vm.provision "ImageBackup", :type => "shell", :name => "Exporting necessary images", :inline => "
+                    apt install docker.io
+                    ctr images ls -q | grep -v 'sha256:' > images.txt
+                    cat images.txt | xargs -I IMG sudo docker pull IMG
+                    rm -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
+                    docker save $(cat images.txt) -o /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
+                    apt purge docker.io
+                "
+            end # backup
             
         end # node cfg
     end if init # node
