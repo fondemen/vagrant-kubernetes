@@ -446,6 +446,24 @@ EOF
     config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
         crictl --runtime-endpoint=unix://#{cri_socket} pull traefik:#{traefik_version}
     " if traefik_version && !init
+
+    config_all.vm.provision "PodmanInstall", :type => "shell", :name => "Installing podman", :inline => "
+        if ! which podman >/dev/null 2>&1; then
+            [ $(sysctl -b kernel.unprivileged_userns_clone) = '1' ] || (echo 'kernel.unprivileged_userns_clone=1' >/etc/sysctl.d/00-local-userns.conf && systemctl restart procps)
+            grep -q 'buster-backports main' /etc/apt/sources.list || echo 'deb http://deb.debian.org/debian buster-backports main' >> /etc/apt/sources.list
+            [ -f /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list ] || echo 'deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_10/ /' >/etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+            apt-key export devel:kubic 2>/dev/null | grep -q 'PUBLIC KEY' || curl -sL https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_10/Release.key | sudo apt-key add -
+            apt-get update
+            apt-get -y -t buster-backports install libseccomp2
+            apt-get -y install podman
+            systemctl restart dbus
+        fi
+
+        [ -f /etc/bash_completion.d/podman ] || curl -sL https://raw.githubusercontent.com/containers/podman/master/completions/bash/podman >/etc/bash_completion.d/podman
+        grep -q 'alias docker=' /etc/bash.bashrc || echo 'alias docker=podman' >> /etc/bash.bashrc
+        grep -q 'complete -F __start_podman docker' /etc/bash.bashrc || echo 'complete -F __start_podman docker' >> /etc/bash.bashrc
+    " if cri != 'docker'
+
         
     (1..nodes).each do |node_number|
         definition = definitions[node_number-1]
