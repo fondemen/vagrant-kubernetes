@@ -56,6 +56,20 @@ if (k8s_version) then
     k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 end
 
+docker_version = read_env 'DOCKER_VERSION', false
+cri = (read_env 'MASTER_CRI', if docker_version then 'docker' else 'containerd' end).downcase
+case cri
+    when 'containerd'
+        docker = false
+    when 'docker'
+        docker = true
+        if ! docker_version
+            docker_version = '19.03' # check https://github.com/rancher/install-docker
+        end
+    else
+        raise "Only containerd and docker cri are supported"
+end
+
 box = read_env 'BOX', if k8s_short_version != 'latest' && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.20'), Gem::Version.new('1.20')) then 'fondement/k3s' else 'bento/debian-10' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k3s.json
 # Box-dependent
@@ -313,12 +327,22 @@ Vagrant.configure("2") do |config_all|
             if k8s_version
 
                 if master
+
+                    # Docker installation
+                    if docker
+                        config.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
+                            which docker >/dev/null 2>&1 || curl -sfL https://releases.rancher.com/install-docker/#{docker_version}.sh | sh
+                            usermod -aG docker #{vagrant_user}
+                            docker images | grep -q rancher || [ -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar ] && docker load -i /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
+                        "
+                    end
+
                     # Initializing K8s
                     config.vm.provision "K8SInit", type: "shell", name: 'Initializing the Kubernetes cluster', inline: "
                         export INSTALL_K3S_SKIP_DOWNLOAD=true
                         #{if k8s_version != 'latest' then "INSTALL_K3S_VERSION=\"v#{k8s_version}\"" end}
                         #{if calico then "export INSTALL_K3S_EXEC=\"--flannel-backend=none --disable-network-policy --cluster-cidr=192.168.0.0/16\"" end}
-                        sh ./install/k3s.sh --node-ip #{ip} --advertise-address #{ip} --no-deploy=traefik --no-deploy=servicelb --no-deploy=local-storage --write-kubeconfig-mode=640 #{if flannel then "--flannel-iface '#{internal_itf}'" end}
+                        sh ./install/k3s.sh --node-ip #{ip} --advertise-address #{ip} --no-deploy=traefik --no-deploy=servicelb --no-deploy=local-storage --write-kubeconfig-mode=640 #{if flannel then "--flannel-iface '#{internal_itf}'" end} #{if docker then "--docker" end}
                         systemctl enable --now k3s
                         if [ ! -d $HOME/.kube ]; then mkdir -p $HOME/.kube ; cp -f -i /etc/rancher/k3s/k3s.yaml $HOME/.kube/config ; fi
                         if [ ! -d #{vagrant_home}/.kube ]; then mkdir -p #{vagrant_home}/.kube ; cp -f -i /etc/rancher/k3s/k3s.yaml #{vagrant_home}/.kube/config ; chown #{vagrant_user}:#{vagrant_group} #{vagrant_home}/.kube/config ; fi
@@ -401,7 +425,7 @@ subjects:
             if k8s_version && helm_version && longhorn_version && master
                 config.vm.provision "LonghornInstall", :type => "shell", :name => "Installing Longhorn #{longhorn_version}", :inline => "
                     helm repo list | grep -q longhorn || ( helm repo add longhorn https://charts.longhorn.io && helm repo update )
-                    kubectl get ns longhorn-system 2>/dev/null | grep -q longhorn-system 2>&1 || (kubectl create ns longhorn-system && helm -n longhorn-system install longhorn #{if longhorn_version != 'latest' then "--version #{longhorn_version}" end} longhorn/longhorn --set defaultSettings.defaultReplicaCount=\"#{longhorn_replicas}\" --set defaultSettings.defaultDataLocality=\"best-effort\")
+                    kubectl get ns longhorn-system 2>/dev/null | grep -q longhorn-system 2>&1 || (kubectl create ns longhorn-system && helm -n longhorn-system install longhorn #{if longhorn_version != 'latest' then "--version #{longhorn_version}" end} longhorn/longhorn --set persistence.defaultClassReplicaCount=\"#{longhorn_replicas}\")
                 "
             end # longhorn
 

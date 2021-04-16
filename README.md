@@ -67,6 +67,10 @@ Default is latest.
 The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Must be above 3.
 Default is 3.5.3.
 
+#### MASTER_CRI
+The container runtime to use for the master. Possible values are containerd or docker. Define docker in order to build images on the first node.
+Default is containerd.
+
 ### Storage configuration
 
 #### LONGHORN_VERSION
