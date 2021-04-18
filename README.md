@@ -68,7 +68,7 @@ The version of [Helm](https://helm.sh/) to install. Check https://github.com/hel
 Default is 3.5.3.
 
 #### MASTER_CRI
-The container runtime to use for the master. Possible values are containerd or docker. Define docker in order to build images on the first node.
+The container runtime to use for the master. Possible values are containerd or docker. Define docker in case you need to build images on the first node.
 Default is containerd.
 
 ### Storage configuration
@@ -102,19 +102,11 @@ The number of nodes in the cluster (including master).
 Default is 3.
 
 #### MEM
-The memory used by each worker VM (in MB)
-Default is 2048.
+The memory used by each node (in MB)
+Default is 1536.
 
 #### CPU
-The number of CPUs for worker nodes
-Default is 1.
-
-#### MASTER_MEM
-The memory used by the master VM (in MB)
-Default is 2048.
-
-#### MASTER_CPU
-The number of CPUs for the master node
+The number of CPUs for nodes. Minimum is 2.
 Default is 2.
 
 #### PUBLIC_ROOT_KEY
