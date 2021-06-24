@@ -131,7 +131,7 @@ raise "Traefik requires Helm to be installed" if traefik_version && !helm_versio
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.99.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.98.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
