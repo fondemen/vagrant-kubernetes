@@ -48,7 +48,7 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.23.3' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
 k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
@@ -74,7 +74,7 @@ else
     raise "Unknown CRI: #{cri} ; choose between containerd and docker"
 end
 
-box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
+box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-11' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
@@ -101,9 +101,9 @@ if read_bool_env 'LINSTOR', true
     linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "latest" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
-    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.28-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.32-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
-    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.16.0" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.20.2" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_size = (read_env 'LINSTOR_DRBD_SIZE', 60).to_i
     linstor_pg_version = read_env 'LINSTOR_PG_VERSION', "12" # check https://hub.docker.com/_/postgres?tab=description
     linstor_zfs = false # not implemented yet
@@ -122,7 +122,7 @@ vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep
 traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.3' else false end) # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.8.0' else false end) # check https://github.com/helm/helm/releases
 raise "Helm is supported as from version 3" if Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 raise "Linstor requires Helm to be installed" if linstor_kube_version && !helm_version
@@ -130,7 +130,7 @@ raise "Traefik requires Helm to be installed" if traefik_version && !helm_versio
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.11.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.60.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
@@ -433,11 +433,11 @@ EOF
                 dpkg-query -S drbd-utils >/dev/null || (
                     [ -f drbd-utils_#{drbd_utils_version}-1_amd64.deb ] || (
                         [ -d drbd-utils-#{drbd_utils_version} ] || (
-                            curl -sL https://github.com/LINBIT/drbd-utils/archive/v#{drbd_utils_version}.tar.gz | tar -xz
-                            curl -sL https://www.linbit.com/downloads/drbd/utils/drbd-utils-#{drbd_utils_version}.tar.gz | tar -xz
+                            curl -sL https://github.com/LINBIT/drbd-utils/archive/refs/tags/v#{drbd_utils_version}.tar.gz | tar -xz
+                            curl -sL https://pkg.linbit.com/downloads/drbd/utils/drbd-utils-#{drbd_utils_version}.tar.gz | tar -xz
                         )
                         cd drbd-utils-#{drbd_utils_version}
-                        apt-get install -y dh-systemd docbook-xsl flex xsltproc po4a
+                        apt-get install -y docbook-xsl flex xsltproc po4a dpkg-dev autoconf bash-completion debhelper
                         ./autogen.sh
                         dpkg-buildpackage -rfakeroot -b -uc
                         cd ..
@@ -446,7 +446,7 @@ EOF
                 )
                 [ -f drbd-dkms_#{drbd_version}_all.deb ] || (
                     echo 'DRDB kernel module has to be compiled ; please, be patient'
-                    [ -d drbd-#{drbd_version} ] || curl -sL https://www.linbit.com/downloads/drbd/#{drbd_simple_version}/drbd-#{drbd_version}.tar.gz | tar -xz
+                    [ -d drbd-#{drbd_version} ] || curl -sL https://pkg.linbit.com/downloads/drbd/#{drbd_simple_version}/drbd-#{drbd_version}.tar.gz | tar -xz
                     [ -d drdb-#{drbd_version}/debian ] || (
                         curl -sL https://github.com/LINBIT/drbd/archive/refs/tags/drbd-#{drbd_version}.tar.gz | tar -xz
                         mv drbd-drbd-#{drbd_version}/debian drbd-#{drbd_version}/debian
@@ -454,7 +454,7 @@ EOF
                     )
                     cd drbd-#{drbd_version}
                     # check https://dev.tranquil.it/wiki/Xenserver_-_Cr%C3%A9er_des_paquets_Debian_drbd9
-                    apt-get install -y debhelper linux-headers-$(uname -r) dkms
+                    apt-get install -y debhelper linux-headers-$(uname -r) dkms dpkg-dev
                     make
                     make clean
                     dpkg-buildpackage -rfakeroot -b -uc
