@@ -48,15 +48,15 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.23.3' end)
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.23.3' else '1.23.3' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
-k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
+k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.5.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
 cri = (read_env 'CRI', if Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then 'containerd' else 'docker' end).downcase
 
-containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else 'latest' end)
+containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.12' else 'latest' end)
 docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' elsif cri != 'docker' && Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then false else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
@@ -93,22 +93,24 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end if k8s_version
-calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18' else 'latest' end) if calico
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.22' else 'latest' end) if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/archive/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
 if read_bool_env 'LINSTOR', true
-    linstor_kube_version = read_env 'LINSTOR_KUBE_VERSION', "latest" # check https://github.com/kvaps/kube-linstor/releases
+    linstor_piraeus_version = read_env 'LINSTOR_PIRAEUS_VERSION', "latest" # check https://github.com/kvaps/kube-linstor/releases
     linstor_ns = read_env 'LINSTOR_NS', "linstor"
     linstor_password = read_env 'LINSTOR_PASSWORD', "linstor_supersecret_password"
-    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', "9.0.32-1" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_version = read_env 'LINSTOR_DRBD_DKMS_VERSION', (if own_image then '9.1.5-1' else 'latest' end) # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_simple_version = drbd_version.split('.').slice(0,2).join('.')
-    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', "9.20.2" # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
+    drbd_utils_version = read_env 'LINSTOR_DRBD_UTILS_VERSION', (if own_image then '9.20.2' else 'latest' end) # check https://www.linbit.com/linbit-software-download-page-for-linstor-and-drbd-linux-driver/
     drbd_size = (read_env 'LINSTOR_DRBD_SIZE', 60).to_i
     linstor_pg_version = read_env 'LINSTOR_PG_VERSION', "12" # check https://hub.docker.com/_/postgres?tab=description
+    linstor_stork_scheduler = read_env 'LINSTOR_STORK_SCHEDULER_VERSION', (if own_image then '1.21.9' elsif Gem::Version.new(k8s_version) < Gem::Version.new('1.22') then k8s_version else '1.21.9' end)
     linstor_zfs = false # not implemented yet
+    linstor_compile = false
 else
-    linstor_kube_version = false
+  linstor_piraeus_version = false
 end
 
 # Directory root for additional vdisks for Linstor
@@ -119,13 +121,13 @@ else
 end
 vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub(/^[^:]+:/, '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
-traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
+traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.6.0' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
 helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.8.0' else false end) # check https://github.com/helm/helm/releases
 raise "Helm is supported as from version 3" if Gem::Version.new(helm_version) < Gem::Version.new('3')
 
-raise "Linstor requires Helm to be installed" if linstor_kube_version && !helm_version
+raise "Linstor requires Helm to be installed" if linstor_piraeus_version && !helm_version
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
 
 host_itf = read_env 'ITF', false
@@ -404,73 +406,88 @@ EOF
         )
     " if helm_version && !init
 
-    config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Taefik #{traefik_version} binaries", :inline => "
+    config_all.vm.provision "TraefikDownload", :type => "shell", :name => "Downloading Traefik #{traefik_version} binaries", :inline => "
         crictl --runtime-endpoint=unix://#{cri_socket} pull traefik:#{traefik_version}
     " if traefik_version && !init
 
     # Linstor / DRBBD installation
-    if linstor_kube_version
+    if linstor_piraeus_version
 
         config_all.vm.provision "LinstorDownload", :type => "shell", :name => "Downloading Linstor", :inline => "
-            helm repo list 2>/dev/null | grep -q kvaps || helm repo add kvaps https://kvaps.github.io/charts && helm repo update
-            K8S_VERSION=$(apt-cache madison kubeadm | grep '#{k8s_version}' | head -1 | awk '{print $3}' | cut -d- -f1)
-            helm template linstor #{if linstor_kube_version != 'latest' then "--version #{linstor_kube_version}" else "" end} kvaps/linstor --set storkScheduler.image.tag=v$K8S_VERSION --set haController.enabled=false | grep 'image:' | sed 's/image://' | sed 's/\"//g' | sed 's/ *$//g' | sed 's/^ *//g' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
+            export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+            export DEBIAN_FRONTEND=noninteractive
+            which git >/dev/null 2>&1 || apt-get update && apt-get install -y git
+            #helm repo list 2>/dev/null | grep -q kvaps || helm repo add kvaps https://kvaps.github.io/charts && helm repo update
+            git clone --depth=1 -b '#{if linstor_piraeus_version == 'latest' then 'master' else linstor_piraeus_version end}' https://github.com/piraeusdatastore/piraeus-operator
+            #helm template linstor #{if linstor_piraeus_version != 'latest' then "--version #{linstor_piraeus_version}" else "" end} kvaps/linstor --set storkScheduler.image.tag=v$K8S_VERSION --set haController.enabled=false | grep 'image:' | sed 's/image://' | sed 's/\"//g' | sed 's/ *$//g' | sed 's/^ *//g' | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
+            helm template linstor ./piraeus-operator/charts/piraeus --set haController.enabled=false --set etcd.enabled=false --set stork.enabled=true --set stork.schedulerTag=v#{linstor_stork_scheduler} | grep 'mage' | grep -v imagePull | cut -d: -f2- | sed 's/\"//g' | sed 's/^\\s*//' | sed 's/\\s*$//' | uniq | xargs -I IMG crictl --runtime-endpoint=unix://#{cri_socket} pull IMG
             crictl --runtime-endpoint=unix://#{cri_socket} pull postgres:#{linstor_pg_version}
             apt-get install -y linux-headers-$(uname -r)
         " unless init
 
-        # TODO: check https://packages.linbit.com/proxmox/dists/proxmox-6/drbd-9.0/binary-amd64/ for simpler install
-        #wget -O- https://packages.linbit.com/package-signing-pubkey.asc | apt-key add -
-        #PVERS=6 && echo "deb http://packages.linbit.com/proxmox/ proxmox-$PVERS drbd-9.0" > /etc/apt/sources.list.d/linbit.list
-        #apt-get update
-        #apt-get install drbd-dkms drbdtop
-        config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD kernel module", :inline => "
+        if linstor_compile
+          config_all.vm.provision "DRBDCompile", :type => "shell", :name => "Compiling and installing DRBD kernel module", :inline => "
+              export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+              export DEBIAN_FRONTEND=noninteractive
+              lsmod | grep -i drbd 1>/dev/null 2>&1 || (
+                  mkdir -p drbd
+                  cd drbd
+                  dpkg-query -S drbd-utils >/dev/null || (
+                      [ -f drbd-utils_#{drbd_utils_version}-1_amd64.deb ] || (
+                          [ -d drbd-utils-#{drbd_utils_version} ] || (
+                              curl -sL https://github.com/LINBIT/drbd-utils/archive/refs/tags/v#{drbd_utils_version}.tar.gz | tar -xz
+                              curl -sL https://pkg.linbit.com/downloads/drbd/utils/drbd-utils-#{drbd_utils_version}.tar.gz | tar -xz
+                          )
+                          cd drbd-utils-#{drbd_utils_version}
+                          apt-get install -y docbook-xsl flex xsltproc po4a dpkg-dev autoconf bash-completion debhelper
+                          ./autogen.sh
+                          dpkg-buildpackage -rfakeroot -b -uc
+                          cd ..
+                      )
+                      dpkg -i drbd-utils_#{drbd_utils_version}-1_amd64.deb
+                  )
+                  [ -f drbd-dkms_#{drbd_version}_all.deb ] || (
+                      echo 'DRDB kernel module has to be compiled ; please, be patient'
+                      [ -d drbd-#{drbd_version} ] || curl -sL https://pkg.linbit.com/downloads/drbd/#{drbd_simple_version}/drbd-#{drbd_version}.tar.gz | tar -xz
+                      [ -d drdb-#{drbd_version}/debian ] || (
+                          curl -sL https://github.com/LINBIT/drbd/archive/refs/tags/drbd-#{drbd_version}.tar.gz | tar -xz
+                          mv drbd-drbd-#{drbd_version}/debian drbd-#{drbd_version}/debian
+                          rm -rf drbd-drbd-#{drbd_version}
+                      )
+                      cd drbd-#{drbd_version}
+                      # check https://dev.tranquil.it/wiki/Xenserver_-_Cr%C3%A9er_des_paquets_Debian_drbd9
+                      apt-get install -y debhelper linux-headers-$(uname -r) dkms dpkg-dev
+                      make
+                      make clean
+                      dpkg-buildpackage -rfakeroot -b -uc
+                      cd ..
+                  )
+                  dpkg -i drbd-dkms_#{drbd_version}_all.deb
+                  cd ..
+                  rm -rf drbd
+
+                  #apt-get purge -y docbook-xsl flex xsltproc po4a debhelper
+                  #apt-get autoremove -y
+
+                  modprobe drbd
+              )
+              grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd >> /etc/modules-load.d/modules.conf 
+          "
+        else
+          config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD kernel module", :inline => "
             export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
             export DEBIAN_FRONTEND=noninteractive
-            lsmod | grep -i drbd 1>/dev/null 2>&1 || (
-                mkdir -p drbd
-                cd drbd
-                dpkg-query -S drbd-utils >/dev/null || (
-                    [ -f drbd-utils_#{drbd_utils_version}-1_amd64.deb ] || (
-                        [ -d drbd-utils-#{drbd_utils_version} ] || (
-                            curl -sL https://github.com/LINBIT/drbd-utils/archive/refs/tags/v#{drbd_utils_version}.tar.gz | tar -xz
-                            curl -sL https://pkg.linbit.com/downloads/drbd/utils/drbd-utils-#{drbd_utils_version}.tar.gz | tar -xz
-                        )
-                        cd drbd-utils-#{drbd_utils_version}
-                        apt-get install -y docbook-xsl flex xsltproc po4a dpkg-dev autoconf bash-completion debhelper
-                        ./autogen.sh
-                        dpkg-buildpackage -rfakeroot -b -uc
-                        cd ..
-                    )
-                    dpkg -i drbd-utils_#{drbd_utils_version}-1_amd64.deb
-                )
-                [ -f drbd-dkms_#{drbd_version}_all.deb ] || (
-                    echo 'DRDB kernel module has to be compiled ; please, be patient'
-                    [ -d drbd-#{drbd_version} ] || curl -sL https://pkg.linbit.com/downloads/drbd/#{drbd_simple_version}/drbd-#{drbd_version}.tar.gz | tar -xz
-                    [ -d drdb-#{drbd_version}/debian ] || (
-                        curl -sL https://github.com/LINBIT/drbd/archive/refs/tags/drbd-#{drbd_version}.tar.gz | tar -xz
-                        mv drbd-drbd-#{drbd_version}/debian drbd-#{drbd_version}/debian
-                        rm -rf drbd-drbd-#{drbd_version}
-                    )
-                    cd drbd-#{drbd_version}
-                    # check https://dev.tranquil.it/wiki/Xenserver_-_Cr%C3%A9er_des_paquets_Debian_drbd9
-                    apt-get install -y debhelper linux-headers-$(uname -r) dkms dpkg-dev
-                    make
-                    make clean
-                    dpkg-buildpackage -rfakeroot -b -uc
-                    cd ..
-                )
-                dpkg -i drbd-dkms_#{drbd_version}_all.deb
-                cd ..
-                rm -rf drbd
-
-                #apt-get purge -y docbook-xsl flex xsltproc po4a debhelper
-                #apt-get autoremove -y
-
-                modprobe drbd
-            )
+            [ -f /etc/apt/trusted.gpg.d/linstor-apt-key.gpg ] || wget -O- https://packages.linbit.com/package-signing-pubkey.asc | apt-key --keyring /etc/apt/trusted.gpg.d/linstor-apt-key.gpg add
+            [ -f /etc/apt/sources.list.d/linbit.list ] || echo \"deb http://packages.linbit.com/proxmox/ proxmox-7 drbd-9\" > /etc/apt/sources.list.d/linbit.list && apt-get update
+            DRBD_DKMS_VERSION=#{if drbd_version == 'latest' then '*' else "$(apt-cache madison drbd-dkms | grep '#{drbd_version}' | head -1 | awk '{print $3}')" end}
+            DRBD_UTILS_VERSION=#{if drbd_utils_version == 'latest' then '*' else "$(apt-cache madison drbd-utils | grep '#{drbd_utils_version}' | head -1 | awk '{print $3}')" end}
+            [ -f /proc/drbd ] || apt-get install -y linux-headers-$(uname -r) drbd-dkms=$DRBD_DKMS_VERSION drbd-utils=$DRBD_UTILS_VERSION && modprobe drbd
+            [ \"$(cat /sys/module/drbd/parameters/usermode_helper)\" == \"disabled\" ] || echo -n disabled > /sys/module/drbd/parameters/usermode_helper
             grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd >> /etc/modules-load.d/modules.conf 
-        "
+            grep -q 'options drbd usermode_helper=' /etc/modprobe.d/drbd.conf 2>/dev/null || echo 'options drbd usermode_helper=disabled' > /etc/modprobe.d/drbd.conf
+          "
+        end
+
         config_all.vm.provision "ZFSInstall", :type => "shell", :name => "Installing ZFS kernel module", :inline => "
             lsmod | grep -qi zfs || (
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
@@ -623,10 +640,10 @@ subjects:
                 "
             end # Helm
 
-            if linstor_kube_version
+            if linstor_piraeus_version
 
-                linstor_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-controller -o jsonpath=\"{.items[0].metadata.name}\" 2>/dev/null) -c linstor-controller -- linstor"
-                stork_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app=linstor-stork -o jsonpath=\"{.items[0].metadata.name}\") -c stork -- /storkctl"
+                linstor_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l app.kubernetes.io/name=piraeus-controller -o jsonpath=\"{.items[0].metadata.name}\" 2>/dev/null) -c linstor-controller -- linstor"
+                stork_cmd = "kubectl exec -n #{linstor_ns} $(kubectl -n #{linstor_ns} get pod -l name=stork -o jsonpath=\"{.items[0].metadata.name}\") -c stork -- /storkctl/linux/storkctl"
 
                 if master
 
@@ -634,6 +651,9 @@ subjects:
                         kubectl get namespaces #{linstor_ns} > /dev/null 2>&1 || kubectl create namespace #{linstor_ns}
                     "
                     config.vm.provision "LinstorDB", :type => "shell", :name => "Setting-up database for Linstor", :inline => <<-EOF
+                        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                        export DEBIAN_FRONTEND=noninteractive
+                        which git >/dev/null 2>&1 || apt-get update && apt-get install git
                         kubectl -n #{linstor_ns} get svc linstor-db >/dev/null 2>&1 || echo '---
 apiVersion: apps/v1
 kind: Deployment
@@ -704,83 +724,52 @@ spec:
 EOF
 
                     config.vm.provision "Linstor", :type => "shell", :name => "Setting-up Linstor", :inline => <<-EOF
-                        helm repo list 2>/dev/null | grep -q kvaps || helm repo add kvaps https://kvaps.github.io/charts && helm repo update
-                        K8S_SCHEDULER_IMAGE=$(kubectl -n kube-system get pods --no-headers -o custom-columns=":..image" | grep kube-scheduler | head -1 | cut -d, -f1)
-                        K8S_SCHEDULER_IMAGE_TAG=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f2)
-                        K8S_SCHEDULER_IMAGE=$(echo $K8S_SCHEDULER_IMAGE | cut -d: -f1)
+                        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                        export DEBIAN_FRONTEND=noninteractive
+                        which git >/dev/null 2>&1 || apt-get update && apt-get install -y git
+                        # helm repo list 2>/dev/null | grep -q kvaps || helm repo add kvaps https://kvaps.github.io/charts && helm repo update
+                        [ -d piraeus-operator ] || git clone --depth=1 -b '#{if linstor_piraeus_version == 'latest' then 'master' else linstor_piraeus_version end}' https://github.com/piraeusdatastore/piraeus-operator
                         helm -n #{linstor_ns} status linstor 2>/dev/null | grep -q deployed || echo "
-controller:
-  replicaCount: 1
-  db:
-    user: linstor
-    password: #{linstor_password}
-    connectionUrl: jdbc:postgresql://linstor-db/linstor
-  nodeSelector:
-    #{control_plane_label}: \\"\\"
+etcd:
+  enabled: false
+operator:
   tolerations: 
   - effect: NoSchedule
     key: node-role.kubernetes.io/master
   - effect: NoSchedule
     key: node-role.kubernetes.io/control-plane
-
-ssl:
-  enabled: false
-stunnel:
-  enabled: false
-    
-satellite:
-  ssl:
-    enabled: false
-  tolerations: 
-  - effect: NoSchedule
-    key: node-role.kubernetes.io/master
-  - effect: NoSchedule
-    key: node-role.kubernetes.io/control-plane
-
-stork:
-  replicaCount: 1
-  tolerations:
-  - effect: NoSchedule
-    key: node-role.kubernetes.io/master
-  - effect: NoSchedule
-    key: node-role.kubernetes.io/control-plane
-  #{if nodes < 5 then "nodeSelector:
-    #{control_plane_label}: \\\"\\\"" else "" end}
-
-storkScheduler:
-  image:
-    repository: $K8S_SCHEDULER_IMAGE
-    tag: $K8S_SCHEDULER_IMAGE_TAG
-  replicaCount: 1
-  tolerations:
-  - effect: NoSchedule
-    key: node-role.kubernetes.io/master
-  - effect: NoSchedule
-    key: node-role.kubernetes.io/control-plane
-  #{if nodes < 5 then "nodeSelector:
-    #{control_plane_label}: \\\"\\\"" else "" end}
-
-    
-csi:
   controller:
-    replicaCount: 1
+    dbConnectionURL: jdbc:postgresql://linstor-db/linstor?user=linstor&password=#{linstor_password}
+    connectionUrl: 
     nodeSelector:
       #{control_plane_label}: \\"\\"
-    tolerations:
+    tolerations: 
     - effect: NoSchedule
       key: node-role.kubernetes.io/master
     - effect: NoSchedule
       key: node-role.kubernetes.io/control-plane
-  node:
-    tolerations:
+  satelliteSet:
+    tolerations: 
     - effect: NoSchedule
       key: node-role.kubernetes.io/master
     - effect: NoSchedule
       key: node-role.kubernetes.io/control-plane
+csi:
+  nodeTolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+  controllerTolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane   
 haController:
-  enabled: false" | helm -n #{linstor_ns} install --wait linstor #{if linstor_kube_version != 'latest' then "--version #{linstor_kube_version}" else "" end} kvaps/linstor -f -
-                        # temporary pach for https://github.com/kvaps/kube-linstor/issues/34
-                        kubectl get clusterrole linstor-stork-scheduler -o jsonpath="{.rules[?(@['apiGroups'][0]=='storage.k8s.io')].resources[?(@)]}" | grep -q csistoragecapacities || kubectl patch clusterrole linstor-stork-scheduler --type json -p '[{"op": "add", "path": "/rules/-", "value":{"apiGroups":["storage.k8s.io"], "resources": ["csistoragecapacities", "csidrivers"], "verbs": ["get", "list", "watch"]}}]'
+  enabled: false
+stork:
+  enabled: #{if nodes > 1 then 'true' else 'false' end} # https://github.com/piraeusdatastore/piraeus-operator/issues/205
+  schedulerTag: v#{linstor_stork_scheduler}" | helm -n #{linstor_ns} install linstor ./piraeus-operator/charts/piraeus -f -
                         grep -q 'alias linstor=' /etc/bash.bashrc || echo 'alias linstor=\"#{linstor_cmd}\"' >> /etc/bash.bashrc
                         grep -q 'alias storkctl=' /etc/bash.bashrc || echo 'alias storkctl=\"#{stork_cmd}\"' >> /etc/bash.bashrc
                         #{linstor_cmd} node list >/dev/null 2>&1 || echo "Waiting for linstor to be up and running (might take some few minutes)"
@@ -789,9 +778,9 @@ EOF
                 end # master
 
                 config.vm.provision "LinstorAddNode", :type => "shell", :name => "Adding #{hostname} to Linstor", :inline => "
-                    ssh root@#{root_hostname} 'kubectl -n #{linstor_ns} get --no-headers pods -o wide | grep #{hostname} | grep linstor-satellite | grep -qi running' || (
+                    ssh root@#{root_hostname} 'kubectl -n #{linstor_ns} get --no-headers pods -o wide | grep #{hostname} | grep linstor-piraeus-csi-node | grep -qi running' || (
                       echo \"Waiting for linstor to be active on this node\"
-                      until ssh root@#{root_hostname} 'kubectl -n #{linstor_ns} get --no-headers pods -o wide | grep #{hostname} | grep linstor-satellite | grep -qi running'; do sleep 2; done
+                      until ssh root@#{root_hostname} 'kubectl -n #{linstor_ns} get --no-headers pods -o wide | grep #{hostname} | grep linstor-piraeus-csi-node | grep -qi running'; do sleep 2; done
                     )
                     ssh root@#{root_hostname} '#{linstor_cmd} node list' | grep #{hostname} | grep -q #{ip} || (
                       ssh root@#{root_hostname} '#{linstor_cmd} node create #{hostname} #{ip}'

@@ -117,6 +117,10 @@ Default is 9.16.0.
 Size in GiB of the GlusterFS-dedicated additional partition. A new disk of this size is to be created for each VM.
 Default is 60.
 
+#### LINSTOR_STORK_SCHEDULER_VERSION
+The version of Kubernetes scheduler to use for Stork. Ideally, should be the same as [K8S_VERSION](#k8s_version), but latest K8s versions are not compatible.
+Default is minimum between [K8S_VERSION](#k8s_version) and 1.21.9
+
 ### Ingress configuration
 
 #### TRAEFIK

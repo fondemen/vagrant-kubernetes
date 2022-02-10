@@ -1,7 +1,6 @@
-export BOX='bento/debian-10'
+export BOX='bento/debian-11'
 export UPGRADE=true
 export GUEST_ADDITIONS=true
-export GLUSTER=true
 export LINSTOR=true
 export INIT=false
 vagrant box update
@@ -17,4 +16,5 @@ unset UPGRADE
 unset GUEST_ADDITIONS
 unset INIT
 export BOX=k8sl
+export K8S_IMAGE=1
 vagrant up
