@@ -48,37 +48,38 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5+k3s1' else '1.20' end)
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.23.3+k3s1' else '1.20' end) # check https://github.com/k3s-io/k3s
 if (k8s_version) then
     k8s_short_version = if k8s_version == 'latest' then 'latest' else k8s_version.split('.').slice(0,2).join('.') end
-    k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
+    k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.5.0' else 'latest' end)
     k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
     k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 end
 
 docker_version = read_env 'DOCKER_VERSION', false
-cri = (read_env 'MASTER_CRI', if docker_version then 'docker' else 'containerd' end).downcase
+cri = (read_env 'MASTER_CRI', if docker_version and Gem::Version.new(k8s_short_version) < Gem::Version.new('1.22') then 'docker' else 'containerd' end).downcase
 case cri
     when 'containerd'
         docker = false
     when 'docker'
+        raise "Docker CRI is no longer supported as of Kubernetes 1.22" if Gem::Version.new(k8s_short_version) >= Gem::Version.new('1.22')
         docker = true
-        if ! docker_version
-            docker_version = '19.03' # check https://github.com/rancher/install-docker
-        end
+        docker_version = true if ! docker_version
     else
         raise "Only containerd and docker cri are supported"
 end
 
-box = read_env 'BOX', if k8s_short_version != 'latest' && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.20'), Gem::Version.new('1.20')) then 'fondement/k3s' else 'bento/debian-10' end # must be debian-based
-box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k3s.json
+docker_version = '20.10.9' if docker_version and !!docker_version == docker_version # check https://github.com/rancher/install-docker/tree/master/dist
+
+box = read_env 'BOX', if k8s_short_version != 'latest' && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.23'), Gem::Version.new('1.23')) then 'fondement/k3s' else 'bento/debian-11' end # must be debian-based
+box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/bd/vg/k3s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
 vagrant_group = read_env 'VAGRANT_GUEST_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
-calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18' else 'latest' end)
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.22' else 'latest' end)
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/archive/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
@@ -94,14 +95,14 @@ case cni
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end if k8s_version
 
-longhorn_version = read_env 'LONGHORN_VERSION', (if own_image then '1.1.0' else 'latest' end)
+longhorn_version = read_env 'LONGHORN_VERSION', (if own_image then '1.2.3' else 'latest' end) # check https://github.com/longhorn/longhorn
 longhorn_db_port = (read_env 'LONGHORN_DB_PORT', '8002').to_i
 longhorn_replicas = (read_env 'LONGHORN_REPLICAS', [1, [nodes-1, 3].min].max).to_i
 
-traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
+traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.6.0' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.3' else false end) # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.8.0' else false end) # check https://github.com/helm/helm/releases
 raise "Helm is supported as from version 3" if helm_version && Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 raise "Longhorn requires Helm to be installed" if longhorn_version && !helm_version
@@ -109,7 +110,7 @@ raise "Traefik requires Helm to be installed" if traefik_version && !helm_versio
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.99.200").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.60.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k3s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
@@ -329,12 +330,17 @@ Vagrant.configure("2") do |config_all|
                 if master
 
                     # Docker installation
-                    if docker
+                    if docker_version
                         config.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
-                            which docker >/dev/null 2>&1 || curl -sfL https://releases.rancher.com/install-docker/#{docker_version}.sh | sh
+                            which docker >/dev/null 2>&1 || curl -sfL https://raw.githubusercontent.com/rancher/install-docker/master/dist/20.10.9.sh | sh
                             usermod -aG docker #{vagrant_user}
                             docker images | grep -q rancher || [ -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar ] && docker load -i /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
                         "
+                    end
+                    if docker
+                      config.vm.provision "DockerImageLoad", :type => "shell", :name => 'Preloading images into Docker', :inline => "
+                          docker images | grep -q rancher || [ -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar ] && docker load -i /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
+                      "
                     end
 
                     # Initializing K8s
@@ -604,15 +610,13 @@ EOF
             end # Traefik
 
             
-
-            if read_bool_env 'BACKUP' && master
+            if master and read_bool_env 'BACKUP'
                 config.vm.provision "ImageBackup", :type => "shell", :name => "Exporting necessary images", :inline => "
-                    apt install docker.io
-                    ctr images ls -q | grep -v 'sha256:' > images.txt
+                    crictl images | grep -v IMAGE | awk '{print $1 \":\" $2;}' > images.txt
                     cat images.txt | xargs -I IMG sudo docker pull IMG
                     rm -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
                     docker save $(cat images.txt) -o /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
-                    apt purge docker.io
+                    chmod a+r /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
                 "
             end # backup
             

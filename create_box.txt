@@ -1,5 +1,7 @@
-export BOX='bento/debian-10'
+export BOX='bento/debian-11'
 export NODES=2
+export K8S_IMAGE=1
+export DOCKER_VERSION=1
 vagrant box update
 vagrant up
 # check dashboard and wait for stabilization

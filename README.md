@@ -13,19 +13,19 @@ vagrant ssh
 kubectl get pods
 ```
 
-Created nodes are k3s01 (master), k3s02, k3s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kubernetes Dashboard with admin rigths is available at http://192.168.99.200:8001/
+Created nodes are k3s01 (master), k3s02, k3s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kubernetes Dashboard with admin rigths is available at http://192.168.60.100:8001/
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
-[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Longhorn](https://longhorn.io/). Longhorn dashboard is available at http://192.168.99.200:8002. Check other branches to change storage provider or use Kubeadm.
+[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Longhorn](https://longhorn.io/). Longhorn dashboard is available at http://192.168.60.100:8002. Check other branches to change storage provider or use Kubeadm.
 
-[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.99.200:9000/.
+[Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.60.100:9000/.
 
 ## Testing
 
-Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/k3s/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.99.200/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.99.200/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.99.200` should return a 403 (as no file exists to be served).
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/k3s/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.60.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.60.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.60.100` should return a 403 (as no file exists to be served).
 
-To load a file, `kubectl exec $(kubectl get pods -l=run=nginx -o jsonpath="{.items[0].metadata.name}") -- sh -c 'echo "Hello!" >/usr/share/nginx/html/index.html'` will create an index.html file with `Hello!` as content in the volume which is shared betwxeen both nginx pods. Now `curl -H 'Host: nginx.local' 192.168.99.200` should serve you `Hello!`.
+To load a file, `kubectl exec $(kubectl get pods -l=run=nginx -o jsonpath="{.items[0].metadata.name}") -- sh -c 'echo "Hello!" >/usr/share/nginx/html/index.html'` will create an index.html file with `Hello!` as content in the volume which is shared betwxeen both nginx pods. Now `curl -H 'Host: nginx.local' 192.168.60.100` should serve you `Hello!`.
 
 ## Remote access
 
@@ -128,8 +128,8 @@ The name prefix for VMs. The final VM name is the prefix followed by VM number u
 Default value is k8s.
 
 #### MASTER_IP
-The IP of the first node (e.g. k8s01), that is the master node. Other nodes have the same IP + their node number -1, e.g. if node 0 is 192.168.99.200, then node 3 is 192.168.99.202.
-Default value is 192.168.99.200.
+The IP of the first node (e.g. k8s01), that is the master node. Other nodes have the same IP + their node number -1, e.g. if node 0 is 192.168.60.100, then node 3 is 192.168.99.202.
+Default value is 192.168.60.100.
 
 #### GUEST_ADDITIONS
 Whether to check for VirtualBox guest additions.
