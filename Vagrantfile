@@ -48,15 +48,15 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 own_image = read_bool_env 'K8S_IMAGE'
 
-k8s_version = read_env 'K8S_VERSION', (if own_image then '1.20.5' else '1.20' end)
+k8s_version = read_env 'K8S_VERSION', (if own_image then '1.23.3' else '1.23.3' end)
 k8s_short_version = k8s_version.split('.').slice(0,2).join('.') if k8s_version
-k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.2.0' else 'latest' end)
+k8s_db_version = read_env 'K8S_DB_VERSION', (if own_image then '2.5.0' else 'latest' end)
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 k8s_db_url = "https://raw.githubusercontent.com/kubernetes/dashboard/#{if k8s_db_version == "latest" then "master" else "v#{k8s_db_version}" end}/aio/deploy/alternative.yaml" if k8s_db_version
 
 cri = (read_env 'CRI', if Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then 'containerd' else 'docker' end).downcase
 
-containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.4' else 'latest' end)
+containerd_version = read_env 'CONTAINERD_VERSION', (if own_image then '1.4.12' else 'latest' end)
 docker_version = read_env 'DOCKER_VERSION', (if own_image then '19.03.15' elsif cri != 'docker' && Gem::Version.new(k8s_version) >= Gem::Version.new('1.21') then false else '19.03' end) # check https://kubernetes.io/docs/setup/production-environment/container-runtimes/ and apt-cache madison docker-ce ; apt-cache madison containerd.io
 docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
@@ -74,7 +74,7 @@ else
     raise "Unknown CRI: #{cri} ; choose between containerd and docker"
 end
 
-box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-10' end # must be debian-based
+box = read_env 'BOX', if k8s_short_version && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.17'), Gem::Version.new('1.20')) then 'fondement/k8s' else 'bento/debian-11' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/k8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
@@ -93,14 +93,14 @@ case cni
     else
         raise "Please, supply a CNI provider using the CNI env var ; supported options are 'flannel' and 'calico' (while given '#{cni}')"
 end if k8s_version
-calico_version = read_env 'CALICO_VERSION', (if own_image then '3.18' else 'latest' end) if calico
+calico_version = read_env 'CALICO_VERSION', (if own_image then '3.22' else 'latest' end) if calico
 calico_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calico.yaml' else "https://docs.projectcalico.org/archive/v#{calico_version}/manifests/calico.yaml" end else nil end
 calicoctl_url = if calico_version then if 'latest' == calico_version then 'https://docs.projectcalico.org/manifests/calicoctl.yaml' else "https://docs.projectcalico.org/v#{calico_version}/manifests/calicoctl.yaml" end else nil end
 
 if read_bool_env 'GLUSTER', true
     raise "There should be at least 3 nodes in a GlusterFS cluster ; set GLUSTER env var to 0 to disable GlusterFS" unless nodes >= 3
 
-    gluster_version = read_env 'GLUSTER_VERSION', '7'
+    gluster_version = read_env 'GLUSTER_VERSION', '10'
     gluster_size = (read_env 'GLUSTER_SIZE', 60).to_i
     # Directory root for additional vdisks for Gluster
     if (/cygwin|mswin|mingw|bccwin|wince|emx/ =~ RUBY_PLATFORM) != nil
@@ -110,7 +110,8 @@ if read_bool_env 'GLUSTER', true
     end
     vdisk_root = begin `"#{vboxmanage_path}" list systemproperties`.split(/\n/).grep(/Default machine folder/).first.gsub(/^[^:]+:/, '').strip rescue read_env("HOME") + "/VirtualBox VMs/" end
 
-    heketi_version = read_env 'HEKETI_VERSION', '9.0.0'
+    heketi_version = read_env 'HEKETI_VERSION', '10.4.0'
+    heketi_short_version = heketi_version.split('.')[0]
     raise "Heketi requires both Kubernetes and GlusterFS" unless k8s_version && gluster_version
     heketi_admin_secret = read_env 'HEKETI_ADMIN', "My Secret"
     heketi_secret = read_env 'HEKETI_PASSWORD', "My Secret"
@@ -121,17 +122,17 @@ else
     heketi_version = false
 end
 
-traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.4.8' else 'latest' end) else false end)
+traefik_version = read_env 'TRAEFIK', (if k8s_version then (if own_image then '2.6.0' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
-helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.5.3' else false end) # check https://github.com/helm/helm/releases
+helm_version = read_env 'HELM_VERSION', (if k8s_version then '3.8.0' else false end) # check https://github.com/helm/helm/releases
 raise "Helm is supported as from version 3" if Gem::Version.new(helm_version) < Gem::Version.new('3')
 
 raise "Traefik requires Helm to be installed" if traefik_version && !helm_version
 
 host_itf = read_env 'ITF', false
 
-leader_ip = (read_env 'MASTER_IP', "192.168.99.200").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
+leader_ip = (read_env 'MASTER_IP', "192.168.60.100").split('.').map {|nbr| nbr.to_i} # private ip ; public ip is to be set up with DHCP
 hostname_prefix = read_env 'PREFIX', 'k8s'
 
 expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
@@ -424,7 +425,7 @@ EOF
                 export DEBIAN_FRONTEND=noninteractive
                 if [ ! -x /usr/local/bin/heketi-cli ]; then
                     apt-get install --yes lvm2
-                    echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
+                    echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}-release-#{heketi_short_version}.linux.amd64.tar.gz | tar xz
                     mv ./heketi/heketi /usr/local/bin/
                     mv ./heketi/heketi-cli /usr/local/bin/
                 fi
@@ -622,7 +623,7 @@ EOF
                             export DEBIAN_FRONTEND=noninteractive
                             if [ ! -x /usr/local/bin/heketi-cli ]; then
                                 apt-get install --yes lvm2
-                                echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}.linux.amd64.tar.gz | tar xz
+                                echo 'Downloading Heketi binaries' ; curl -fsSL --progress-bar https://github.com/heketi/heketi/releases/download/v#{heketi_version}/heketi-v#{heketi_version}-release-#{heketi_short_version}.linux.amd64.tar.gz | tar xz
                                 mv ./heketi/heketi /usr/local/bin/
                                 mv ./heketi/heketi-cli /usr/local/bin/
                             fi
@@ -690,7 +691,7 @@ After=network.target
 User=heketi
 Group=heketi
 UMask=077
-ExecStart=/usr/local/bin/heketi --config=/etc/heketi/heketi.json
+ExecStart=/usr/local/bin/heketi --config=/etc/heketi/heketi.json --disable-auth=true
 Restart=on-failure
 
 StandardOutput=syslog
