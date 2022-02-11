@@ -25,7 +25,7 @@ Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A
 
 ## Testing
 
-Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/master/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.60.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.60.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.60.100` should return a 403 (as no file exists to be served).
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/gluster/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.60.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.60.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.60.100` should return a 403 (as no file exists to be served).
 
 To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). You can find the exact volume name with `kubectl get pv $(kubectl get pvc test-gluster-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.glusterfs.path}'`. Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.60.100` should serve you that file.
 
