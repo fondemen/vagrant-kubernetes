@@ -374,7 +374,6 @@ EOF
                             systemctl restart docker
                           fi
                           usermod -aG docker #{vagrant_user}
-                          docker images | grep -q rancher || [ -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar ] && docker load -i /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
                         "
                     end
                     if docker
