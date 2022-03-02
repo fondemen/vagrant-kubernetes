@@ -70,6 +70,7 @@ case cri
 end
 
 docker_version = '20.10.9' if docker_version and !!docker_version == docker_version # check https://github.com/rancher/install-docker/tree/master/dist
+docker_repo_fingerprint = read_env 'DOCKER_APT_FINGERPRINT', '0EBFCD88'
 
 box = read_env 'BOX', if k8s_short_version != 'latest' && Gem::Version.new(k8s_short_version).between?(Gem::Version.new('1.23'), Gem::Version.new('1.23')) then 'fondement/k3s' else 'bento/debian-11' end # must be debian-based
 box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/bd/vg/k3s.json
@@ -329,12 +330,51 @@ Vagrant.configure("2") do |config_all|
 
                 if master
 
+                      # docker repos
+                      if docker_version
+                        config_all.vm.provision "DockerPackages", :type => "shell", :name => 'Configuring Docker repository', :inline => "
+                            if ! apt-cache policy | grep -q docker; then
+                                export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                                export DEBIAN_FRONTEND=noninteractive
+                                apt-get update
+                                apt-get install --yes apt-transport-https ca-certificates curl gnupg2 software-properties-common
+                                DIST=$(lsb_release -i -s  | tr '[:upper:]' '[:lower:]')
+                                curl -fsSL https://download.docker.com/linux/$DIST/gpg | apt-key add -
+                                apt-key fingerprint #{docker_repo_fingerprint}
+                                add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/$DIST $(lsb_release -cs) stable\"
+                                apt-get update
+                            fi
+                        "
+                    end
+
                     # Docker installation
                     if docker_version
                         config.vm.provision "DockerInstall", :type => "shell", :name => 'Installing Docker', :inline => "
-                            which docker >/dev/null 2>&1 || curl -sfL https://raw.githubusercontent.com/rancher/install-docker/master/dist/20.10.9.sh | sh
-                            usermod -aG docker #{vagrant_user}
-                            docker images | grep -q rancher || [ -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar ] && docker load -i /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
+                            if ! which docker >/dev/null; then
+                              export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+                              export DEBIAN_FRONTEND=noninteractive
+                              DOCKER_VERSION=$(apt-cache madison docker-ce | grep '#{docker_version}' | head -1 | awk '{print $3}')
+                              echo \"Installing Docker $DOCKER_VERSION\"
+                              apt-get install --yes docker-ce=$DOCKER_VERSION docker-ce-cli=$DOCKER_VERSION
+                              apt-mark hold docker-ce docker-ce-cli
+                          fi
+                          if [ ! -f /etc/docker/daemon.json ]; then
+                              cat > /etc/docker/daemon.json <<EOF
+{
+  \"exec-opts\": [\"native.cgroupdriver=systemd\"],
+  \"log-driver\": \"json-file\",
+  \"log-opts\": {
+      \"max-size\": \"100m\"
+  },
+  \"storage-driver\": \"overlay2\"
+}
+EOF
+                            mkdir -p /etc/systemd/system/docker.service.d
+                            systemctl daemon-reload
+                            systemctl restart docker
+                          fi
+                          usermod -aG docker #{vagrant_user}
+                          docker images | grep -q rancher || [ -f /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar ] && docker load -i /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar
                         "
                     end
                     if docker
