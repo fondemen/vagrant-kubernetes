@@ -50,6 +50,9 @@ Default is latest/stable.
 The port at which exposing the Kubernetes Dashboard. Traefik must be [enabled](#traefik) for the dashboard to be visible. Set to 0 to disable.
 Default is 8001.
 
+#### LOCAL_INSECURE_REGISTRIES
+Coma-separated list of registries that can be accessed insecurely. Ex: `LOCAL_INSECURE_REGISTRIES`. Default is ''.
+
 ### Ingress configuration
 
 #### TRAEFIK

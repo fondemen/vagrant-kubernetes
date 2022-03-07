@@ -72,6 +72,8 @@ expose_db_ports = read_bool_env 'EXPOSE_DB_PORTS', false
 
 guest_additions = read_bool_env 'GUEST_ADDITIONS', false
 
+local_insecure_regs = (read_env 'LOCAL_INSECURE_REGISTRIES', "").split(",").map {|r| r.strip}
+
 public = read_bool_env 'PUBLIC', false
 private = read_bool_env 'PRIVATE', true
 
@@ -204,12 +206,25 @@ Vagrant.configure("2") do |config_all|
         which snap >/dev/null 2>&1 || ( apt-get install -y snapd && snap install core )
       "
 
-      #raise "Cannot install Kubernetes without Docker or containerd" unless docker_version || containerd_version
       config_all.vm.provision "MicroK8sInstall", :type => "shell", :name => 'Installing MicroK8s', :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
         snap list microk8s >/dev/null 2>&1 || snap install microk8s --classic --channel=#{µk8s_version}
       "
+
+      local_insecure_regs.each do |local_insecure_reg|
+        config_all.vm.provision "AllowLocalRegistry#{local_insecure_reg}", :type => "shell", :name => "Allowing insecure registry at #{local_insecure_reg}", :inline => "
+          if [ ! -f '/var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}/hosts.toml' ]; then
+            mkdir -p /var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}
+            echo 'server = \"http://#{local_insecure_reg}\"
+
+[host.\"#{local_insecure_reg}\"]
+capabilities = [\"pull\", \"resolve\"]' >/var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}/hosts.toml
+            microk8s stop
+            microk8s start
+          fi
+        "
+      end
     end
         
     (1..nodes).each do |node_number|
@@ -275,7 +290,7 @@ Vagrant.configure("2") do |config_all|
                   fi
           
                   [ -f /etc/bash_completion.d/podman ] || curl -sL https://raw.githubusercontent.com/containers/podman/master/completions/bash/podman >/etc/bash_completion.d/podman
-                  grep -q 'alias docker=' /etc/bash.bashrc || echo 'alias docker=podman' >> /etc/bash.bashrc
+                  grep -q 'alias docker=' /etc/bash.bashrc || echo 'alias docker=\"sudo podman\"' >> /etc/bash.bashrc
                   grep -q 'complete -F __start_podman docker' /etc/bash.bashrc || echo 'complete -F __start_podman docker' >> /etc/bash.bashrc
               "
 
@@ -286,7 +301,7 @@ Vagrant.configure("2") do |config_all|
                 mkdir -p /srv/nfs
                 chown nobody:nogroup /srv/nfs
                 chmod 0777 /srv/nfs
-                grep '/srv/nfs' /etc/exports | grep -q #{root_ip} || ( echo \"/srv/nfs #{root_ip}/24(rw,sync,no_subtree_check,)\" >>/etc/exports && systemctl restart nfs-kernel-server )
+                grep '/srv/nfs' /etc/exports | grep -q #{root_ip} || ( echo \"/srv/nfs #{root_ip}/24(rw,sync,no_subtree_check,no_root_squash)\" >>/etc/exports && systemctl restart nfs-kernel-server )
               "
             end
 
