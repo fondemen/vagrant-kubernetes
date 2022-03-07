@@ -1,4 +1,4 @@
-This branch is using gluster as a storage provider.
+This branch is using [MicroK8s](https://microk8s.io) and NFS as storage provider.
 Check other branches for other providers.
 
 # vagrant-kubernetes
@@ -13,25 +13,21 @@ vagrant ssh
 kubectl get pods
 ```
 
-Created nodes are k8s01 (master), k8s02, k8s03 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kubernetes Dashboard with admin rigths is available at http://192.168.60.100:8001/
+Created nodes are k8s01 (master), k8s02 and so on (depends on [NODES](#nodes) and [PREFIX](#prefix) variables). Kubernetes Dashboard with admin rigths is available at http://192.168.60.100:8001/
 
 Cluster can merly be stopped by issuing `vagrant halt` and later restarted with `vagrant up` (with same env vars!).
 
-[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [Heketi](https://github.com/heketi/heketi) / [GlusterFS](https://www.gluster.org/) using default storage class "glusterfs". A new disk is provisionned for each VM dedicated to storage at `~/VirtualBox\ VMs/k8s0X/gluster-k8s0X.vdi`. Key for Heketi to communicate with worker nodes is generated on the fly. Check other branches to chage storage provider.
+[PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#persistentvolumeclaims) are provisionned by [NFS](https://microk8s.io/docs/nfs) using default storage class "nfs-csi". Actual storage is located on the first VM (k8s01) on /srv/nfs. Check other branches to chage storage provider.
 
 [Ingresses](https://kubernetes.io/docs/concepts/services-networking/ingress/) are served by [Traefik](https://docs.traefik.io/providers/kubernetes-ingress/) on port 80. The traefik dashboard is available at http://192.168.60.100:9000/.
 
-Special thanks to [MM. Meyer and Schmuck](https://github.com/MeyerHerve/Projet3A-Kubernetes) for the installation procedure...
-
 ## Testing
 
-Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/gluster/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.60.100/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.60.100/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.60.100` should return a 403 (as no file exists to be served).
+Invoke `kubectl apply -f https://raw.githubusercontent.com/fondemen/vagrant-kubernetes/microk8s/nginx-test-file.yml`. Within the next minute, you should find a [`nginx.local/` router](http://192.168.60.100:9000/dashboard/#/http/routers/nginx-ingress-default-nginx-local@kubernetes) associated to a [servce with two backends](http://192.168.60.100:9000/dashboard/#/http/services/default-nginx-service-80@kubernetes). `curl -H 'Host: nginx.local' 192.168.60.100` should return a 403 (as no file exists to be served).
 
-To load a file, `sudo su -` to get root access, list gluster volumes with `gluster volume list` : one volume should show up (the one created by the persistent volume claim). You can find the exact volume name with `kubectl get pv $(kubectl get pvc test-gluster-pvc -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.glusterfs.path}'`. Create a directory (e.g. `mkdir nginx-data`), and mount that volume with `mount -t glusterfs k8s01:/[volume name] nginx-data`. Add an `index.html` file to `nginx-data` and then `curl -H 'Host: nginx.local' 192.168.60.100` should serve you that file.
+To load a file, `mkdir nginx-data; sudo mount -t nfs 192.168.60.100:/srv/nfs/$(kubectl get pvc test-pvc -o jsonpath='{.spec.volumeName}') nginx-data` to mount the NFS volume. Add an `index.html` file to `nginx-data`, unmount the volume by running `sudo umount nginx-data` and then `curl -H 'Host: nginx.local' 192.168.60.100` should serve you that file.
 
 ## Remote access
-
-To use [kubectl](https://kubernetes.io/fr/docs/reference/kubectl/overview/) directly from the host machine, do `vagrant ssh -c 'cat ~/.kube/config' > kubeconfig; export KUBECONFIG="$PWD/kubeconfig"`. Note that the exported config supplies full admin rights to the cluster.
 
 Dashboards ([Kubernetes](#k8s_db_port) and [Traefik](#traefik_db_port)) can be exposed *unsecured* on the host machine by setting the EXPOSE_DB_PORTS env var to true *before* firing up the `vagrant up` or another `vagrant provision` in case the cluster already exists.
 
@@ -40,70 +36,19 @@ Dashboards ([Kubernetes](#k8s_db_port) and [Traefik](#traefik_db_port)) can be e
 Configuration is performed using environment variables:
 
 #### K8S_IMAGE
-Changes default values for some of the following environment variables (such as [K8S_VERSION](#k8s_version)) so that they match latest [available dedicated image](https://app.vagrantup.com/fondement/boxes/k8s). State `true` or `1` to enable.
+!!! NOT YET IMPLEMENTED !!!
+Changes default values for some of the following environment variables (such as [MICROK8S_VERSION](#k8s_version)) so that they match latest [available dedicated image](https://app.vagrantup.com/fondement/boxes/microk8s). State `true` or `1` to enable.
 Default is false.
 
 ### Cluster configuration
 
-#### CRI
-The [container runtime](https://kubernetes.io/docs/setup/production-environment/container-runtimes/) to use. Possible values are docker and containerd.
-Default is containerd, or docker in case [K8S_VERSION](#k8s_version) is < 1.21.
-
-#### DOCKER_VERSION
-The version of Docker to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [container runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables Docker installation.
-Default is 19.03 or 0 in case [K8S_VERSION](#k8s_version) is >= 1.21.
-
-#### CONTAINERD_VERSION
-The version of Containerd to install. Check with `apt madison docker-ce`. Keep it in sync with [K8S_VERSION](#k8s_version) (see [container runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)).
-Default is 1.4.12.
-
-#### K8S_VERSION
-The version of Kubernetes to install. Keep it in sync with [DOCKER_VERSION](#docker_version) (see [containner runtime installation](https://kubernetes.io/docs/setup/production-environment/container-runtimes/#docker)). Setting this to `0` or `false` disables kubernetes installation.
-Default is 1.23.3.
+#### MICROK8S_VERSION
+The [channel](https://microk8s.io/docs/setting-snap-channel) of MicroK8s to install. Check . Setting this to `0` or `false` disables kubernetes installation.
+Default is latest/stable.
 
 #### K8S_DB_PORT
 The port at which exposing the Kubernetes Dashboard. Traefik must be [enabled](#traefik) for the dashboard to be visible. Set to 0 to disable.
 Default is 8001.
-
-#### K8S_DB_VERSION
-The version of the dashboard to run. To be found at https://github.com/kubernetes/dashboard/tags (avoiding the initial v). Set to latest to get the latest version, or 0 to disable.
-Default is latest.
-
-#### CNI
-The CNI provider to use. Currently supported options are flannel and calico.
-Default is calico.
-
-#### CALICO_VERSION
-The version of calico to use. Set to latest to get the latest version.
-Default is latest.
-
-#### HELM_VERSION
-The version of [Helm](https://helm.sh/) to install. Check https://github.com/helm/helm/releases. Must be above 3.
-Default is 3.8.0.
-
-### Storage configuration
-
-#### GLUSTER
-Wether to install Gluster and Heketi.
-Default is true.
-
-#### GLUSTER_VERSION
-The version of GlusterFS to install. Setting this or [GLUSTER](#gluster) to `0` or `false` disables kubernetes installation.
-Default is 10.
-
-#### GLUSTER_SIZE
-Size in GiB of the GlusterFS-dedicated additional partition. A new disk of this size is to be created for each VM.
-Default is 60.
-
-#### HEKETI_VERSION
-The version of Heketi to install (see https://github.com/heketi/heketi/releases).
-Default is 10.4.0.
-
-#### HEKETI_ADMIN
-Admin password for Heketi.
-
-#### HEKETI_PASSWORD
-User passsword for Heketi.
 
 ### Ingress configuration
 
@@ -119,7 +64,7 @@ Default is 9000.
 
 #### NODES
 The number of nodes in the cluster (including master).
-Default is 3 (minimum required for Heketi, could be 2 if setting [GLUSTER](#gluster) to 0).
+Default is 2.
 
 #### MEM
 The memory used by each worker VM (in MB)
