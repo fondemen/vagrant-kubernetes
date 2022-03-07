@@ -286,12 +286,12 @@ Vagrant.configure("2") do |config_all|
                 mkdir -p /srv/nfs
                 chown nobody:nogroup /srv/nfs
                 chmod 0777 /srv/nfs
-                grep '/srv/nfs' /etc/exports | grep -q #{root_ip} || ( echo \"/srv/nfs #{root_ip}/24(rw,sync,no_subtree_check)\" >>/etc/exports &&  systemctl restart nfs-kernel-server)
+                grep '/srv/nfs' /etc/exports | grep -q #{root_ip} || ( echo \"/srv/nfs #{root_ip}/24(rw,sync,no_subtree_check,)\" >>/etc/exports && systemctl restart nfs-kernel-server )
               "
             end
 
             config.vm.provision "NFSClient", :type => "shell", :name => 'Authorizing NFS client', :inline => "
-              ssh -o StrictHostKeyChecking=no #{root_hostname} grep -q #{ip} /etc/exports || ssh -o StrictHostKeyChecking=no #{root_hostname} sh -c 'echo \"/srv/nfs #{ip}(rw,sync,no_subtree_check)\" >> /etc/exports && systemctl restart nfs-kernel-server'
+              ssh -o StrictHostKeyChecking=no #{root_hostname} grep -q #{ip} /etc/exports || ssh -o StrictHostKeyChecking=no #{root_hostname} sh -c 'echo \"/srv/nfs #{ip}(rw,sync,no_subtree_check,no_root_squash)\" >> /etc/exports && systemctl restart nfs-kernel-server'
             " if false
 
             if µk8s_version
