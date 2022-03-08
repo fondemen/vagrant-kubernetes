@@ -46,6 +46,8 @@ master_cpus = read_env 'MASTER_CPU', ([cpus.to_i, 2].max).to_s # 2 CPU min for m
 nodes = (read_env 'NODES', 2).to_i
 raise "There should be at least one node and at most 255 while prescribed #{nodes} ; you can set up node number like this: NODES=2 vagrant up" unless nodes.is_a? Integer and nodes >= 1 and nodes <= 255
 
+locale = (read_env "LC_ALL", "fr_FR").split('.')[0]
+
 own_image = false #read_bool_env 'K8S_IMAGE'
 
 µk8s_version = read_env 'MICROK8S_VERSION', 'latest/stable'
@@ -53,14 +55,14 @@ own_image = false #read_bool_env 'K8S_IMAGE'
 k8s_db_port = (read_env 'K8S_DB_PORT', 8001).to_i
 
 box = read_env 'BOX', if own_image then 'fondement/microk8s' else 'bento/debian-11' end # must be debian-based
-box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/vagrant/microk8s.json
+box_url = read_env 'BOX_URL', false # e.g. https://svn.ensisa.uha.fr/bd/vg/microk8s.json
 # Box-dependent
 vagrant_user = read_env 'VAGRANT_GUEST_USER', 'vagrant'
 vagrant_group = read_env 'VAGRANT_GUEST_GROUP', 'vagrant'
 vagrant_home = read_env 'VAGRANT_GUEST_HOME', '/home/vagrant'
 upgrade = read_bool_env 'UPGRADE'
 
-traefik_version = read_env 'TRAEFIK', (if µk8s_version then (if own_image then '2.6.0' else 'latest' end) else false end)
+traefik_version = read_env 'TRAEFIK', (if µk8s_version then (if own_image then '2.6.1' else 'latest' end) else false end)
 traefik_db_port = (read_env 'TRAEFIK_DB_PORT', '9000').to_i
 
 host_itf = read_env 'ITF', false
@@ -179,11 +181,18 @@ Vagrant.configure("2") do |config_all|
         apt-get -y autoclean
     " if upgrade
 
+    config_all.vm.provision "Setting locale", :name => "locale", :type => "shell", :inline => "
+      if [ $(localectl status | grep LANG | cut -f2 -d= | cut -d. -f1) != \"#{locale}\" ]; then
+        sed -i 's/^#\\s*#{locale}.UTF-8/#{locale}.UTF-8/' /etc/locale.gen;
+        locale-gen && localectl set-locale LANG=#{locale}.UTF-8
+      fi
+    "
+
     # Referencing all IPs in /etc/hosts
     config_all.vm.provision "Network", :type => "shell", :name => "Configuring network", :inline => "
         echo 'nameserver 8.8.8.8 8.8.4.4' > /etc/resolv.conf
         sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf
-        sed -i '/^127\\.\\0\\.1\\.1/d' /etc/hosts
+        sed -i '/^127\\.\\0\\.[^0]\\.1/d' /etc/hosts
     " if init
     definitions.each do |node|
         config_all.vm.provision "#{node[:hostname]}Access", :type => "shell", :name  => "Referencing #{node[:hostname]}", :inline => "grep -q " + node[:hostname] + " /etc/hosts || echo \"" + node[:ip] + " " + node[:hostname] + "\" >> /etc/hosts"
@@ -297,7 +306,7 @@ capabilities = [\"pull\", \"resolve\"]' >/var/snap/microk8s/current/args/certs.d
               config.vm.provision "NFSServer", :type => "shell", :name => 'Installing an NFS server', :inline => "
                 export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
                 export DEBIAN_FRONTEND=noninteractive
-                apt-get install -y nfs-kernel-server
+                dpkg -l | grep nfs-kernel-server | grep -q ^ii || apt-get install -y nfs-kernel-server
                 mkdir -p /srv/nfs
                 chown nobody:nogroup /srv/nfs
                 chmod 0777 /srv/nfs
@@ -357,6 +366,7 @@ mountOptions:
                     config.vm.provision "K8SJoin", type: "shell", name: 'Joining the MicroK8s cluster', inline: "
                       ssh -o StrictHostKeyChecking=no #{root_hostname} $(which microk8s) kubectl get no #{hostname} 2>/dev/null | grep -q #{hostname} || (
                         JOIN_CMD=\"$(ssh -o StrictHostKeyChecking=no #{root_hostname} $(which microk8s) add-node --format short | grep '#{root_ip}') --worker\"
+                        echo \"#{hostname} joining the cluster\" && 
                         eval $JOIN_CMD
                       )
                     "

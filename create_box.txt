@@ -1,18 +1,18 @@
-export BOX='bento/debian-10'
+export BOX='bento/debian-11'
 export UPGRADE=true
 export GUEST_ADDITIONS=true
-export INIT=false
+export NODES=1
 vagrant box update
 vagrant up
-rm k8s.box
-vagrant package --output k8s.box
-vagrant box remove k8s
-vagrant box add k8s k8s.box
+rm microk8s.box
+vagrant package --output microk8s.box
+vagrant box remove microk8s
+vagrant box add microk8s microk8s.box
 
 #### Testing ####
 vagrant destroy -f default
 unset UPGRADE
 unset GUEST_ADDITIONS
-unset INIT
-export BOX=k8s
+unsert NODES
+export BOX=microk8s
 vagrant up
