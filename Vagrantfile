@@ -165,6 +165,7 @@ Vagrant.configure("2") do |config_all|
         if Vagrant.has_plugin?("vagrant-vbguest") then
             config_all.vbguest.auto_update = upgrade
         end
+        vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
     end
 
     # Generic
@@ -189,8 +190,6 @@ Vagrant.configure("2") do |config_all|
 
     # Referencing all IPs in /etc/hosts
     config_all.vm.provision "Network", :type => "shell", :name => "Configuring network", :inline => "
-        echo 'nameserver 8.8.8.8 8.8.4.4' > /etc/resolv.conf
-        sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf
         sed -i '/^127\\.\\0\\.[^0]\\.1/d' /etc/hosts
     " if init
     definitions.each do |node|
