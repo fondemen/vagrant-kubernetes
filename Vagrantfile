@@ -48,7 +48,7 @@ raise "There should be at least one node and at most 255 while prescribed #{node
 
 locale = (read_env "LC_ALL", "fr_FR").split('.')[0]
 
-own_image = false #read_bool_env 'K8S_IMAGE'
+own_image = read_bool_env 'K8S_IMAGE'
 
 µk8s_version = read_env 'MICROK8S_VERSION', 'latest/stable'
 
@@ -150,7 +150,6 @@ Vagrant.configure("2") do |config_all|
     # forward ssh agent to easily ssh into the different machines
     config_all.ssh.forward_agent = true
     config_all.vm.box = box
-    config_all.vm.box_version = "0.#{k8s_short_version}" if box == 'fondement/k8s' && k8s_short_version
     begin config_all.vm.box_url = box_url if box_url rescue nil end
 
     config_all.vm.synced_folder ".", "/vagrant", disabled: true
