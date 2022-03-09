@@ -215,8 +215,8 @@ Vagrant.configure("2") do |config_all|
       config_all.vm.provision "MicroK8sDownload", :type => "shell", :name => 'Downloading MicroK8s', :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
-        if [ ! snap list microk8s >/dev/null 2>&1 ]; then
-          if [ ! ls microk8s_*.assert >/dev/null 2>&1 ]; then
+        if ! snap list microk8s >/dev/null 2>&1; then
+          if ! ls microk8s_*.assert >/dev/null 2>&1; then
             echo \"Downloading MicroK8s #{µk8s_version}\"
             snap download microk8s --channel=#{µk8s_version}
             snap ack $(ls microk8s_*.assert)
@@ -231,18 +231,21 @@ Vagrant.configure("2") do |config_all|
           snap ack $(ls microk8s_*.assert)
           rm -f microk8s_*.assert
         fi
-        if [ ! snap list microk8s >/dev/null 2>&1 ]; then
+        if ! snap list microk8s >/dev/null 2>&1; then
           if ls microk8s_*.snap >/dev/null 2>&1; then
+            echo \"Installing local MicroK8s\"
             snap install $(ls microk8s_*.snap) --classic
             rm microk8s_*.snap
             rm -rf snap
           else
+            echo \"Installing MicroK8s #{µk8s_version}\"
             snap install microk8s --classic --channel=#{µk8s_version}
           fi
+          while snap changes | tail +2 | grep . | grep -vq Done; do sleep 1; done
         fi
         groups vagrant | grep -q microk8s || usermod -a -G microk8s #{vagrant_user}
-        [ -d #{vagrant_home}/.kube ] && chown -f -R vagrant #{vagrant_home}/.kube
-        [ -f #{vagrant_home}/images.tar ] && microk8s ctr images import #{vagrant_home}/images.tar && rm #{vagrant_home}/images.tar
+        [ -d #{vagrant_home}/.kube ] && chown -f -R vagrant #{vagrant_home}/.kube || /bin/true
+        [ -f #{vagrant_home}/images.tar ] && microk8s ctr images import #{vagrant_home}/images.tar && rm #{vagrant_home}/images.tar || /bin/true
       " if init
 
       local_insecure_regs.each do |local_insecure_reg|
