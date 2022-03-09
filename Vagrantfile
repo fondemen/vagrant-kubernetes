@@ -258,7 +258,7 @@ capabilities = [\"pull\", \"resolve\"]' >/var/snap/microk8s/current/args/certs.d
           fi
         "
       end if init
-      config_all.vm.provision "MicroK8sRestart", :type => "shell", :name => 'Restarting MicroK8s', :inline => "microk8s stop; microk8s start" if init && local_insecure_regs.length > 0
+      config_all.vm.provision "MicroK8sRestart", :type => "shell", :name => 'Restarting MicroK8s', :inline => "microk8s stop; microk8s start; while snap changes | tail +2 | grep . | grep -vq Done; do sleep 1; done" if init && local_insecure_regs.length > 0
 
     end
 
