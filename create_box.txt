@@ -1,9 +1,17 @@
 export BOX='bento/debian-11'
-export UPGRADE=true
-export GUEST_ADDITIONS=true
 export NODES=1
 vagrant box update
 vagrant up
+# check dashboard and wait for stabilization
+BACKUP=1 vagrant provision --provision-with ImageBackup
+vagrant scp k8s01:/home/vagrant/images.tar .
+vagrant scp k8s01:/home/vagrant/images.txt .
+vagrant destroy -f
+export UPGRADE=true
+export GUEST_ADDITIONS=true
+export INIT=0
+vagrant up
+vagrant scp images.tar images.tar
 rm microk8s.box
 vagrant package --output microk8s.box
 vagrant box remove microk8s
@@ -11,8 +19,9 @@ vagrant box add microk8s microk8s.box
 
 #### Testing ####
 vagrant destroy -f default
+unset INIT
 unset UPGRADE
 unset GUEST_ADDITIONS
-unsert NODES
+unset NODES
 export BOX=microk8s
 vagrant up

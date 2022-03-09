@@ -165,7 +165,6 @@ Vagrant.configure("2") do |config_all|
         if Vagrant.has_plugin?("vagrant-vbguest") then
             config_all.vbguest.auto_update = upgrade
         end
-        vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
     end
 
     # Generic
@@ -213,26 +212,63 @@ Vagrant.configure("2") do |config_all|
         which snap >/dev/null 2>&1 || ( apt-get install -y snapd && snap install core )
       "
 
+      config_all.vm.provision "MicroK8sDownload", :type => "shell", :name => 'Downloading MicroK8s', :inline => "
+        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+        export DEBIAN_FRONTEND=noninteractive
+        snap list microk8s >/dev/null 2>&1 || ls microk8s_*.assert >/dev/null 2>&1 || snap download microk8s --channel=#{µk8s_version} && snap ack $(ls microk8s_*.assert)
+      "
+
       config_all.vm.provision "MicroK8sInstall", :type => "shell", :name => 'Installing MicroK8s', :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
-        snap list microk8s >/dev/null 2>&1 || snap install microk8s --classic --channel=#{µk8s_version}
-      "
+        ls microk8s_*.assert >/dev/null 2>&1 && snap ack $(ls microk8s_*.assert) && rm -f microk8s_*.assert
+        snap list microk8s >/dev/null 2>&1 || ls microk8s_*.snap >/dev/null 2>&1 && snap install $(ls microk8s_*.snap) --classic && rm microk8s_*.snap && rm -rf snap || snap install microk8s --classic --channel=#{µk8s_version}
+        groups vagrant | grep -q microk8s || usermod -a -G microk8s #{vagrant_user}
+        [ -d #{vagrant_home}/.kube ] && chown -f -R vagrant #{vagrant_home}/.kube
+        [ -f #{vagrant_home}/images.tar ] && microk8s ctr images import #{vagrant_home}/images.tar && rm #{vagrant_home}/images.tar
+      " if init
 
       local_insecure_regs.each do |local_insecure_reg|
         config_all.vm.provision "AllowLocalRegistry#{local_insecure_reg}", :type => "shell", :name => "Allowing insecure registry at #{local_insecure_reg}", :inline => "
           if [ ! -f '/var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}/hosts.toml' ]; then
             mkdir -p /var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}
             echo 'server = \"http://#{local_insecure_reg}\"
-
 [host.\"#{local_insecure_reg}\"]
 capabilities = [\"pull\", \"resolve\"]' >/var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}/hosts.toml
-            microk8s stop
-            microk8s start
           fi
         "
-      end
+      end if init
+      config_all.vm.provision "MicroK8sRestart", :type => "shell", :name => 'Restarting MicroK8s', :inline => "microk8s stop; microk8s start" if init && local_insecure_regs.length > 0
+
     end
+
+    config_all.vm.provision "NFSServer", :type => "shell", :name => 'Installing an NFS server', :inline => "
+      export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+      export DEBIAN_FRONTEND=noninteractive
+      dpkg -l | grep nfs-kernel-server | grep -q ^ii || apt-get install -y nfs-kernel-server
+    " unless init
+
+
+    config_all.vm.provision "PodmanInstall", :type => "shell", :name => "Installing podman", :inline => "
+        export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+        export DEBIAN_FRONTEND=noninteractive
+        if ! which podman >/dev/null 2>&1; then
+            [ $(sysctl -b kernel.unprivileged_userns_clone) = '1' ] || (echo 'kernel.unprivileged_userns_clone=1' >/etc/sysctl.d/00-local-userns.conf && systemctl restart procps)
+            grep -q 'buster-backports main' /etc/apt/sources.list || echo 'deb http://deb.debian.org/debian buster-backports main' >> /etc/apt/sources.list
+            [ -f /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list ] || echo 'deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_10/ /' >/etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+            apt-key export devel:kubic 2>/dev/null | grep -q 'PUBLIC KEY' || curl -sL https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_10/Release.key | sudo apt-key add -
+            apt-get update
+            apt-get -y -t buster-backports install libseccomp2
+            apt-get -y install podman
+            systemctl restart dbus
+        fi
+
+        [ -f /etc/bash_completion ] || apt-get install -y bash-completion
+        mkdir -p /etc/bash_completion.d
+        [ -f /etc/bash_completion.d/podman ] || curl -sL https://raw.githubusercontent.com/containers/podman/master/completions/bash/podman >/etc/bash_completion.d/podman
+        grep -q 'alias docker=' /etc/bash.bashrc || echo 'alias docker=\"sudo podman\"' >> /etc/bash.bashrc
+        grep -q 'complete -F __start_podman docker' /etc/bash.bashrc || echo 'complete -F __start_podman docker' >> /etc/bash.bashrc
+    " unless init
         
     (1..nodes).each do |node_number|
         definition = definitions[node_number-1]
@@ -312,17 +348,11 @@ capabilities = [\"pull\", \"resolve\"]' >/var/snap/microk8s/current/args/certs.d
               "
             end
 
-            config.vm.provision "NFSClient", :type => "shell", :name => 'Authorizing NFS client', :inline => "
-              ssh -o StrictHostKeyChecking=no #{root_hostname} grep -q #{ip} /etc/exports || ssh -o StrictHostKeyChecking=no #{root_hostname} sh -c 'echo \"/srv/nfs #{ip}(rw,sync,no_subtree_check,no_root_squash)\" >> /etc/exports && systemctl restart nfs-kernel-server'
-            " if false
-
             if µk8s_version
 
                 if master
                   config.vm.provision "MicroK8sMainConfig", :type => "shell", :name => 'Configuring MicroK8s on main node', :inline => "
-                    groups vagrant | grep -q microk8s || usermod -a -G microk8s #{vagrant_user}
-                    chown -f -R vagrant #{vagrant_home}/.kube
-                    [ -f /etc/bash_completion ] || apt-get install bash-completion
+                    [ -f /etc/bash_completion ] || apt-get install -y bash-completion
                     [ -f /etc/bash_completion.d/kubectl ] || mkdir -p /etc/bash_completion.d && microk8s kubectl completion bash >/etc/bash_completion.d/kubectl
                     snap alias microk8s.kubectl kubectl
                     snap alias microk8s.kubectl k
@@ -535,6 +565,13 @@ EOF
                     end # K8S Dashboard over traefik
                 end
             end # Traefik
+
+            if master and read_bool_env 'BACKUP'
+              config.vm.provision "ImageBackup", :type => "shell", :name => "Exporting necessary images", :inline => "
+                  microk8s ctr images ls -q | grep -v sha256 > images.txt
+                  microk8s ctr images export images.tar $(cat images.txt)
+              "
+          end # backup
             
         end # node cfg
     end if init # node
