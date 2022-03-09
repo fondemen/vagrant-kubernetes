@@ -255,10 +255,11 @@ Vagrant.configure("2") do |config_all|
             echo 'server = \"http://#{local_insecure_reg}\"
 [host.\"#{local_insecure_reg}\"]
 capabilities = [\"pull\", \"resolve\"]' >/var/snap/microk8s/current/args/certs.d/#{local_insecure_reg}/hosts.toml
+            touch microk8s.restart
           fi
         "
       end if init
-      config_all.vm.provision "MicroK8sRestart", :type => "shell", :name => 'Restarting MicroK8s', :inline => "microk8s stop; microk8s start; while snap changes | tail +2 | grep . | grep -vq Done; do sleep 1; done" if init && local_insecure_regs.length > 0
+      config_all.vm.provision "MicroK8sRestart", :type => "shell", :name => 'Restarting MicroK8s', :inline => "if [ -f microk8s.restart ]; then microk8s stop; microk8s start; rm -f microk8s.restart; while snap changes | tail +2 | grep . | grep -vq Done; do sleep 1; done fi" if init && local_insecure_regs.length > 0
 
     end
 
