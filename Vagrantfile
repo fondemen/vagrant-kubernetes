@@ -215,14 +215,31 @@ Vagrant.configure("2") do |config_all|
       config_all.vm.provision "MicroK8sDownload", :type => "shell", :name => 'Downloading MicroK8s', :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
-        snap list microk8s >/dev/null 2>&1 || ls microk8s_*.assert >/dev/null 2>&1 || snap download microk8s --channel=#{µk8s_version} && snap ack $(ls microk8s_*.assert)
+        if [ ! snap list microk8s >/dev/null 2>&1 ]; then
+          if [ ! ls microk8s_*.assert >/dev/null 2>&1 ]; then
+            echo \"Downloading MicroK8s #{µk8s_version}\"
+            snap download microk8s --channel=#{µk8s_version}
+            snap ack $(ls microk8s_*.assert)
+          fi
+        fi
       "
 
       config_all.vm.provision "MicroK8sInstall", :type => "shell", :name => 'Installing MicroK8s', :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
-        ls microk8s_*.assert >/dev/null 2>&1 && snap ack $(ls microk8s_*.assert) && rm -f microk8s_*.assert
-        snap list microk8s >/dev/null 2>&1 || ls microk8s_*.snap >/dev/null 2>&1 && snap install $(ls microk8s_*.snap) --classic && rm microk8s_*.snap && rm -rf snap || snap install microk8s --classic --channel=#{µk8s_version}
+        if ls microk8s_*.assert >/dev/null 2>&1; then
+          snap ack $(ls microk8s_*.assert)
+          rm -f microk8s_*.assert
+        fi
+        if [ ! snap list microk8s >/dev/null 2>&1 ]; then
+          if ls microk8s_*.snap >/dev/null 2>&1; then
+            snap install $(ls microk8s_*.snap) --classic
+            rm microk8s_*.snap
+            rm -rf snap
+          else
+            snap install microk8s --classic --channel=#{µk8s_version}
+          fi
+        fi
         groups vagrant | grep -q microk8s || usermod -a -G microk8s #{vagrant_user}
         [ -d #{vagrant_home}/.kube ] && chown -f -R vagrant #{vagrant_home}/.kube
         [ -f #{vagrant_home}/images.tar ] && microk8s ctr images import #{vagrant_home}/images.tar && rm #{vagrant_home}/images.tar
