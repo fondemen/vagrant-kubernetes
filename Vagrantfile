@@ -470,8 +470,10 @@ EOF
                   #apt-get autoremove -y
 
                   modprobe drbd
+                  modprobe drbd_transport_tcp
               )
-              grep -q drbd /etc/modules-load.d/modules.conf  || echo drbd >> /etc/modules-load.d/modules.conf 
+              grep -q drbd[^_] /etc/modules-load.d/modules.conf  || echo drbd >> /etc/modules-load.d/modules.conf
+              grep -q drbd_transport_tcp /etc/modules-load.d/modules.conf  || echo drbd_transport_tcp >> /etc/modules-load.d/modules.conf
           "
         else
           config_all.vm.provision "DRBDInstall", :type => "shell", :name => "Installing DRBD kernel module", :inline => "
