@@ -209,7 +209,7 @@ Vagrant.configure("2") do |config_all|
       config_all.vm.provision "SnapInstall", :type => "shell", :name => 'Installing Snap', :inline => "
         export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
         export DEBIAN_FRONTEND=noninteractive
-        which snap >/dev/null 2>&1 || ( apt-get install -y snapd && snap install core )
+        which snap >/dev/null 2>&1 || ( apt-get update && apt-get install -y snapd && snap install core )
       "
 
       config_all.vm.provision "MicroK8sDownload", :type => "shell", :name => 'Downloading MicroK8s', :inline => "
