@@ -545,7 +545,7 @@ subjects:
 - kind: ServiceAccount
   name: admin-user
   namespace: kube-system" | microk8s kubectl apply -f -
-                            TOKEN=$(microk8s kubectl -n kube-system get secret $(microk8s kubectl -n kube-system get sa/admin-user -o jsonpath="{.secrets[0].name}") -o go-template="{{.data.token | base64decode}}")
+                            TOKEN=$(microk8s kubectl -n kube-system get secret admin-user-token -o go-template="{{.data.token | base64decode}}")
                             echo "---
 apiVersion: traefik.containo.us/v1alpha1
 kind: Middleware
