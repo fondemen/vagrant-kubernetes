@@ -524,6 +524,15 @@ metadata:
   name: admin-user
   namespace: kube-system
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: admin-user-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: admin-user
+type: kubernetes.io/service-account-token
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
